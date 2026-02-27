@@ -1,0 +1,6 @@
+> say hello world, one sentence only
+
+✦ Hello, world — it's great to be here!
+
+*   Type your message or @path/to/file
+? for shortcuts                                                            YOLO

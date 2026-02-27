@@ -1,0 +1,4 @@
+Error: Unable to connect to Gemini API. Please check your authentication.
+
+*   Type your message or @path/to/file
+? for shortcuts                                                            YOLO
