@@ -283,7 +283,7 @@ class TestGeminiProviderMessageExtraction:
         output = (
             "> say hello world, one sentence only\n"
             "\n"
-            "✦ Hello, world — it's great to be here!\n"
+            "Model: Hello, world — it's great to be here!\n"
         )
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -296,11 +296,11 @@ class TestGeminiProviderMessageExtraction:
         output = (
             "> first question\n"
             "\n"
-            "✦ First answer from Gemini.\n"
+            "Model: First answer from Gemini.\n"
             "\n"
             "> second question\n"
             "\n"
-            "✦ Second and final answer.\n"
+            "Model: Second and final answer.\n"
         )
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -314,7 +314,7 @@ class TestGeminiProviderMessageExtraction:
         output = (
             "> show me a function\n"
             "\n"
-            "✦ Here's a Python function:\n"
+            "Model: Here's a Python function:\n"
             "\n"
             "```python\n"
             "def hello():\n"
@@ -339,7 +339,7 @@ class TestGeminiProviderMessageExtraction:
             provider.extract_last_message_from_script(output)
 
     def test_extract_message_empty_response(self):
-        output = "✦   \n\n"
+        output = "Model:   \n\n"
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
 
@@ -357,8 +357,8 @@ class TestGeminiProviderMisc:
         pattern = provider.get_idle_pattern_for_log()
         import re
 
-        # Should match the ✦ response marker
-        assert re.search(pattern, "✦ Hello world")
+        # Should match the Model: response marker
+        assert re.search(pattern, "Model: Hello world")
 
     def test_exit_cli(self):
         provider = GeminiProvider("test1234", "test-session", "window-0")

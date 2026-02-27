@@ -56,9 +56,9 @@ class ProviderError(Exception):
 # ANSI escape code pattern for stripping terminal colors
 ANSI_CODE_PATTERN = r"\x1b\[[0-9;]*m"
 
-# Gemini CLI uses ✦ (U+2726, FOUR POINTED STAR) to mark the start of responses.
-# Example: "✦ Hello world."
-RESPONSE_MARKER = "\u2726"
+# In screen-reader mode Gemini CLI prefixes each response with "Model:"
+# Example: "Model:  The essay has been written..."
+RESPONSE_MARKER = "Model:"
 RESPONSE_PATTERN = rf"^{RESPONSE_MARKER}\s"
 
 # User input prompt: when a message is submitted, it shows "> message"
@@ -245,17 +245,18 @@ class GeminiProvider(BaseProvider):
     def get_idle_pattern_for_log(self) -> str:
         """Return pattern for detecting IDLE in pipe-pane log files.
 
-        With screen-reader mode the ✦ response marker is still present in
-        plain-text output and can be used as a signal.
+        In screen-reader mode the ``Model:`` prefix is used as the response
+        marker and can be used as a signal in log files.
         """
         return RESPONSE_PATTERN
 
     def extract_last_message_from_script(self, script_output: str) -> str:
-        """Extract Gemini's final response message using ✦ indicator.
+        """Extract Gemini's final response message using ``Model:`` prefix.
 
-        Gemini CLI marks each response with ✦ (U+2726). We find the last
-        occurrence and extract the text between it and the next user-input
-        prompt (``> ``) or another ✦ marker.
+        In screen-reader mode Gemini CLI prefixes each response with
+        ``Model:``.  We find the last occurrence and extract the text
+        between it and the next user-input prompt (``> ``) or another
+        ``Model:`` marker.
 
         Args:
             script_output: Raw terminal output/script content
@@ -269,17 +270,17 @@ class GeminiProvider(BaseProvider):
         # Strip ANSI codes for pattern matching
         clean_output = re.sub(ANSI_CODE_PATTERN, "", script_output)
 
-        # Find all response markers (✦)
+        # Find all response markers (Model:)
         matches = list(re.finditer(RESPONSE_PATTERN, clean_output, re.MULTILINE))
 
         if not matches:
-            raise ValueError("No Gemini CLI response found - no ✦ pattern detected")
+            raise ValueError("No Gemini CLI response found - no Model: pattern detected")
 
         # Get the last match (final response)
         last_match = matches[-1]
         start_pos = last_match.start()
 
-        # Extract everything after the last ✦ until a stop marker
+        # Extract everything after the last Model: until a stop marker
         remaining_text = clean_output[start_pos:]
 
         # Split by lines and collect response lines
@@ -287,9 +288,9 @@ class GeminiProvider(BaseProvider):
         response_lines = []
 
         for i, line in enumerate(lines):
-            # Skip the first line's ✦ marker for clean extraction
+            # Skip the first line's Model: marker for clean extraction
             if i == 0:
-                # Remove the ✦ prefix
+                # Remove the Model: prefix
                 clean_line = re.sub(rf"^{RESPONSE_MARKER}\s*", "", line).strip()
                 if clean_line:
                     response_lines.append(clean_line)
@@ -302,7 +303,7 @@ class GeminiProvider(BaseProvider):
             response_lines.append(line.rstrip())
 
         if not response_lines or not any(line.strip() for line in response_lines):
-            raise ValueError("Empty Gemini CLI response - no content found after ✦")
+            raise ValueError("Empty Gemini CLI response - no content found after Model:")
 
         # Join lines, strip trailing whitespace, and clean up
         final_answer = "\n".join(response_lines).strip()
