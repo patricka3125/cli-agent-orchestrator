@@ -218,7 +218,51 @@ class GeminiProvider(BaseProvider):
         return True
 
     def get_status(self, tail_lines: Optional[int] = None) -> TerminalStatus:
-        """Get Gemini CLI status by analyzing terminal output.
+        """Get Gemini CLI status by analyzing the dynamic window title.
+
+        Gemini CLI sets the terminal pane title via OSC escape sequences when
+        ``ui.dynamicWindowTitle`` is enabled (default). The title reflects the
+        agent's current state:
+
+        - ``◇  Ready``            → IDLE or COMPLETED
+        - ``✦  Working...``       → PROCESSING
+        - ``✋  Action Required``  → WAITING_USER_ANSWER
+
+        If the title is empty or unrecognized (pre-boot, feature disabled, or
+        an error state), we fall back to capture-pane output parsing.
+
+        Args:
+            tail_lines: Number of lines to capture from terminal history
+                        (used only by the capture-pane fallback).
+
+        Returns:
+            Current TerminalStatus enum value
+        """
+        # --- Primary: window title ---
+        try:
+            title = tmux_client.get_pane_title(self.session_name, self.window_name)
+        except Exception:
+            title = ""
+
+        if title:
+            if "Action Required" in title:
+                return TerminalStatus.WAITING_USER_ANSWER
+            if "Working" in title:
+                return TerminalStatus.PROCESSING
+            if "Ready" in title:
+                if self._input_received:
+                    return TerminalStatus.COMPLETED
+                return TerminalStatus.IDLE
+
+        # --- Fallback: capture-pane output parsing ---
+        return self._get_status_from_output(tail_lines=tail_lines)
+
+    def _get_status_from_output(self, tail_lines: Optional[int] = None) -> TerminalStatus:
+        """Fallback status detection by analyzing captured terminal output.
+
+        Used when the pane title is empty or unrecognized (e.g., before the
+        TUI boots, when ``ui.dynamicWindowTitle`` is disabled, or for error
+        detection which the title does not cover).
 
         Status detection logic (in priority order):
         1. No output → ERROR

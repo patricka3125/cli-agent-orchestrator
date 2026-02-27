@@ -167,9 +167,81 @@ class TestGeminiBuildCommand:
         assert tokens[0].startswith("CAO_TERMINAL_ID=")
 
 
+class TestGeminiProviderTitleBasedStatus:
+    """Tests for primary status detection via dynamic window title."""
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_ready_is_idle(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = "◇  Ready"
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.IDLE
+        mock_tmux.get_history.assert_not_called()
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_ready_after_input_is_completed(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = "◇  Ready"
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        provider._input_received = True
+        status = provider.get_status()
+
+        assert status == TerminalStatus.COMPLETED
+        mock_tmux.get_history.assert_not_called()
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_working_is_processing(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = "✦  Working..."
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.PROCESSING
+        mock_tmux.get_history.assert_not_called()
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_action_required_is_waiting(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = "✋  Action Required"
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.WAITING_USER_ANSWER
+        mock_tmux.get_history.assert_not_called()
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_empty_title_falls_back_to_output(self, mock_tmux):
+        """When title is empty, get_status falls through to capture-pane."""
+        mock_tmux.get_pane_title.return_value = ""
+        mock_tmux.get_history.return_value = load_fixture("gemini_idle_output.txt")
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.IDLE
+        mock_tmux.get_history.assert_called_once()
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_exception_falls_back_to_output(self, mock_tmux):
+        """If get_pane_title raises, fall back gracefully to capture-pane."""
+        mock_tmux.get_pane_title.side_effect = Exception("tmux error")
+        mock_tmux.get_history.return_value = load_fixture("gemini_processing_output.txt")
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.PROCESSING
+        mock_tmux.get_history.assert_called_once()
+
+
 class TestGeminiProviderStatusDetection:
+    """Tests for fallback status detection via capture-pane output parsing."""
+
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_idle(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = load_fixture("gemini_idle_output.txt")
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -179,6 +251,7 @@ class TestGeminiProviderStatusDetection:
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_completed(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = load_fixture("gemini_completed_output.txt")
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -190,6 +263,7 @@ class TestGeminiProviderStatusDetection:
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_completed_without_input_received_is_idle(self, mock_tmux):
         """Before any input is sent, a response marker should still be IDLE."""
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = load_fixture("gemini_completed_output.txt")
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -201,6 +275,7 @@ class TestGeminiProviderStatusDetection:
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_processing(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = load_fixture("gemini_processing_output.txt")
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -210,6 +285,7 @@ class TestGeminiProviderStatusDetection:
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_error(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = load_fixture("gemini_error_output.txt")
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -219,6 +295,7 @@ class TestGeminiProviderStatusDetection:
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_empty_output(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = ""
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -228,6 +305,7 @@ class TestGeminiProviderStatusDetection:
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_waiting_user_answer(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = (
             "> delete all files\n"
             "\n"
@@ -242,6 +320,7 @@ class TestGeminiProviderStatusDetection:
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_with_tail_lines(self, mock_tmux):
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = load_fixture("gemini_idle_output.txt")
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -253,6 +332,7 @@ class TestGeminiProviderStatusDetection:
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_no_tui_footer_is_processing(self, mock_tmux):
         """Before TUI renders, output without footer should be PROCESSING."""
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = "Loading Gemini CLI...\nInitializing...\n"
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
@@ -263,6 +343,7 @@ class TestGeminiProviderStatusDetection:
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_get_status_error_before_tui_renders(self, mock_tmux):
         """Error output before TUI renders should detect as ERROR."""
+        mock_tmux.get_pane_title.return_value = ""
         mock_tmux.get_history.return_value = "Error: Unable to connect to Gemini API.\n"
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
