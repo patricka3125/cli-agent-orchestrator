@@ -429,6 +429,9 @@ class TestInstallCommand:
             assert "mcpServers" in settings
             assert "cao-server" in settings["mcpServers"]
             assert settings["mcpServers"]["cao-server"]["command"] == "uvx"
+            # CAO_TERMINAL_ID must be injected for env var expansion at runtime
+            assert "env" in settings["mcpServers"]["cao-server"]
+            assert settings["mcpServers"]["cao-server"]["env"]["CAO_TERMINAL_ID"] == "$CAO_TERMINAL_ID"
 
     @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
     @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
@@ -493,3 +496,64 @@ class TestInstallCommand:
             assert "existing-server" in settings["mcpServers"]
             assert "new-server" in settings["mcpServers"]
             assert settings["mcpServers"]["new-server"]["command"] == "new-cmd"
+
+    @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.GEMINI_AGENTS_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
+    def test_install_gemini_merges_hooks_to_settings(
+        self, mock_local_store, mock_gemini_dir, mock_context_dir, mock_load, runner
+    ):
+        """Test Gemini install merges hooks into settings.json."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            profile = MagicMock()
+            profile.name = "test-agent"
+            profile.description = "Test agent"
+            profile.tools = None
+            profile.allowedTools = None
+            profile.mcpServers = None
+            profile.prompt = None
+            profile.toolAliases = None
+            profile.toolsSettings = None
+            profile.hooks = {
+                "preToolExecution": [{"command": "echo pre-hook"}],
+            }
+            profile.model = None
+
+            local_path = tmppath / "local"
+            local_path.mkdir(parents=True, exist_ok=True)
+            local_profile = local_path / "test-agent.md"
+            local_profile.write_text("---\nname: test-agent\ndescription: Test agent\n---\n\n# Test\n")
+
+            gemini_path = tmppath / "gemini"
+            gemini_path.mkdir(parents=True, exist_ok=True)
+            settings_file = tmppath / "settings.json"
+
+            mock_local_store.__truediv__ = lambda self, x: local_path / x
+            mock_gemini_dir.__truediv__ = lambda self, x: gemini_path / x
+            mock_gemini_dir.mkdir = MagicMock()
+            mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
+            mock_context_dir.mkdir = MagicMock()
+
+            mock_load.return_value = profile
+
+            (tmppath / "context").mkdir(parents=True, exist_ok=True)
+
+            with patch(
+                "cli_agent_orchestrator.cli.commands.install.GEMINI_SETTINGS_FILE",
+                settings_file,
+            ):
+                result = runner.invoke(install, ["test-agent", "--provider", "gemini"])
+
+            assert "settings updated" in result.output
+
+            # Verify hooks were written to settings.json
+            settings = json.loads(settings_file.read_text())
+            assert "hooks" in settings
+            assert "preToolExecution" in settings["hooks"]
+            assert settings["hooks"]["preToolExecution"][0]["command"] == "echo pre-hook"
+

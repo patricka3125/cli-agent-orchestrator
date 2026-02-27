@@ -25,11 +25,10 @@ Input Submission:
   paste_enter_count = 2.
 """
 
-import json
 import logging
 import re
 import shlex
-import time
+import shutil
 from typing import Optional
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
@@ -182,25 +181,35 @@ class GeminiProvider(BaseProvider):
         """Initialize Gemini CLI provider by starting the gemini command.
 
         This method:
-        1. Waits for the shell to be ready in the tmux window
-        2. Sends the gemini CLI command with --yolo flag
-        3. Waits for the agent to reach IDLE state (ready for input)
+        1. Verifies npx is available on PATH
+        2. Waits for the shell to be ready in the tmux window
+        3. Sends the gemini CLI command with --yolo flag
+        4. Waits for the agent to reach IDLE state (ready for input)
 
         Returns:
             True if initialization was successful
 
         Raises:
+            ProviderError: If npx is not found on PATH
             TimeoutError: If shell or Gemini CLI initialization times out
         """
-        # Step 1: Wait for shell prompt to appear in the tmux window
+        # Step 1: Verify npx is available (required to run @google/gemini-cli)
+        if shutil.which("npx") is None:
+            raise ProviderError(
+                "npx is not available on PATH. "
+                "Gemini CLI requires Node.js and npx to be installed. "
+                "Install Node.js from https://nodejs.org/ and try again."
+            )
+
+        # Step 2: Wait for shell prompt to appear in the tmux window
         if not wait_for_shell(tmux_client, self.session_name, self.window_name, timeout=10.0):
             raise TimeoutError("Shell initialization timed out after 10 seconds")
 
-        # Step 2: Build and send the Gemini CLI command
+        # Step 3: Build and send the Gemini CLI command
         command = self._build_gemini_command()
         tmux_client.send_keys(self.session_name, self.window_name, command)
 
-        # Step 3: Wait for Gemini CLI to fully initialize and show the idle prompt.
+        # Step 4: Wait for Gemini CLI to fully initialize and show the idle prompt.
         # Gemini CLI may take a while to start (npm/npx overhead + auth).
         if not wait_until_status(self, TerminalStatus.IDLE, timeout=60.0, polling_interval=1.0):
             raise TimeoutError("Gemini CLI initialization timed out after 60 seconds")

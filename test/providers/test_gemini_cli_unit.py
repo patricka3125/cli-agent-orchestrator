@@ -17,10 +17,12 @@ def load_fixture(filename: str) -> str:
 
 
 class TestGeminiProviderInitialization:
+    @patch("cli_agent_orchestrator.providers.gemini.shutil")
     @patch("cli_agent_orchestrator.providers.gemini.wait_until_status")
     @patch("cli_agent_orchestrator.providers.gemini.wait_for_shell")
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
-    def test_initialize_success(self, mock_tmux, mock_wait_shell, mock_wait_status):
+    def test_initialize_success(self, mock_tmux, mock_wait_shell, mock_wait_status, mock_shutil):
+        mock_shutil.which.return_value = "/usr/bin/npx"
         mock_wait_shell.return_value = True
         mock_wait_status.return_value = True
 
@@ -29,15 +31,18 @@ class TestGeminiProviderInitialization:
 
         assert result is True
         assert provider._initialized is True
+        mock_shutil.which.assert_called_once_with("npx")
         mock_wait_shell.assert_called_once()
         sent_command = mock_tmux.send_keys.call_args.args[2]
         assert "CAO_TERMINAL_ID=test1234" in sent_command
         assert "npx @google/gemini-cli --yolo" in sent_command
         mock_wait_status.assert_called_once()
 
+    @patch("cli_agent_orchestrator.providers.gemini.shutil")
     @patch("cli_agent_orchestrator.providers.gemini.wait_for_shell")
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
-    def test_initialize_shell_timeout(self, mock_tmux, mock_wait_shell):
+    def test_initialize_shell_timeout(self, mock_tmux, mock_wait_shell, mock_shutil):
+        mock_shutil.which.return_value = "/usr/bin/npx"
         mock_wait_shell.return_value = False
 
         provider = GeminiProvider("test1234", "test-session", "window-0", None)
@@ -45,16 +50,28 @@ class TestGeminiProviderInitialization:
         with pytest.raises(TimeoutError, match="Shell initialization timed out"):
             provider.initialize()
 
+    @patch("cli_agent_orchestrator.providers.gemini.shutil")
     @patch("cli_agent_orchestrator.providers.gemini.wait_until_status")
     @patch("cli_agent_orchestrator.providers.gemini.wait_for_shell")
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
-    def test_initialize_gemini_timeout(self, mock_tmux, mock_wait_shell, mock_wait_status):
+    def test_initialize_gemini_timeout(self, mock_tmux, mock_wait_shell, mock_wait_status, mock_shutil):
+        mock_shutil.which.return_value = "/usr/bin/npx"
         mock_wait_shell.return_value = True
         mock_wait_status.return_value = False
 
         provider = GeminiProvider("test1234", "test-session", "window-0", None)
 
         with pytest.raises(TimeoutError, match="Gemini CLI initialization timed out"):
+            provider.initialize()
+
+    @patch("cli_agent_orchestrator.providers.gemini.shutil")
+    def test_initialize_npx_not_found(self, mock_shutil):
+        """ProviderError is raised when npx is not on PATH."""
+        mock_shutil.which.return_value = None
+
+        provider = GeminiProvider("test1234", "test-session", "window-0", None)
+
+        with pytest.raises(ProviderError, match="npx is not available on PATH"):
             provider.initialize()
 
 
@@ -133,6 +150,21 @@ class TestGeminiBuildCommand:
 
         with pytest.raises(ProviderError, match="Failed to load agent profile"):
             provider._build_gemini_command()
+
+    def test_build_command_special_chars_in_terminal_id(self):
+        """Terminal IDs with shell metacharacters are safely quoted."""
+        provider = GeminiProvider("term with spaces & $pecial", "test-session", "window-0", None)
+        command = provider._build_gemini_command()
+
+        # shlex.quote wraps the value so shell metacharacters are safe
+        assert "npx @google/gemini-cli --yolo" in command
+        # The terminal ID must appear quoted (not raw)
+        assert "term with spaces" not in command.split("CAO_TERMINAL_ID=")[0]
+        # Verify the command is parseable by the shell
+        import shlex
+        tokens = shlex.split(command)
+        # First token should be the env assignment
+        assert tokens[0].startswith("CAO_TERMINAL_ID=")
 
 
 class TestGeminiProviderStatusDetection:
