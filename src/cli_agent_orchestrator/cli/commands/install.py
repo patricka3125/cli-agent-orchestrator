@@ -1,14 +1,18 @@
 """Install command for CLI Agent Orchestrator."""
 
+import json
 from importlib import resources
 from pathlib import Path
 
 import click
+import frontmatter
 import requests
 
 from cli_agent_orchestrator.constants import (
     AGENT_CONTEXT_DIR,
     DEFAULT_PROVIDER,
+    GEMINI_AGENTS_DIR,
+    GEMINI_SETTINGS_FILE,
     KIRO_AGENTS_DIR,
     LOCAL_AGENT_STORE_DIR,
     PROVIDERS,
@@ -54,6 +58,29 @@ def _download_agent(source: str) -> str:
         return dest_file.stem
 
     raise FileNotFoundError(f"Source not found: {source}")
+
+
+def _merge_gemini_settings(updates: dict) -> None:
+    """Merge updates into ~/.gemini/settings.json (additive).
+
+    Reads the existing settings file, merges the provided dict keys
+    into it, and writes back. For dict-valued keys (e.g., mcpServers),
+    existing entries are preserved and new ones are added/overwritten.
+    For list-valued keys (e.g., hooks event arrays), new items are appended.
+    """
+    settings: dict = {}
+    if GEMINI_SETTINGS_FILE.exists():
+        settings = json.loads(GEMINI_SETTINGS_FILE.read_text())
+
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(settings.get(key), dict):
+            # Dict merge: add new entries, overwrite matching keys
+            settings[key].update(value)
+        else:
+            settings[key] = value
+
+    GEMINI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    GEMINI_SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")
 
 
 @click.command()
@@ -156,6 +183,39 @@ def install(agent_source: str, provider: str):
             agent_file = KIRO_AGENTS_DIR / f"{safe_filename}.json"
             with open(agent_file, "w") as f:
                 f.write(agent_config.model_dump_json(indent=2, exclude_none=True))
+
+        elif provider == ProviderType.GEMINI.value:
+            # Gemini CLI subagents use .md files with YAML frontmatter,
+            # but only support a subset of keys: name, description, tools, model.
+            # Unsupported keys (mcpServers, hooks, etc.) go into settings.json.
+            GEMINI_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+            safe_filename = profile.name.replace("/", "__")
+            agent_file = GEMINI_AGENTS_DIR / f"{safe_filename}.md"
+
+            # Build Gemini-compatible frontmatter (only supported keys)
+            gemini_meta = {"name": profile.name, "description": profile.description}
+            if profile.tools:
+                gemini_meta["tools"] = profile.tools
+            if profile.model:
+                gemini_meta["model"] = profile.model
+
+            # Read source to get markdown body (system prompt)
+            with open(source_file, "r") as src:
+                source_post = frontmatter.loads(src.read())
+
+            # Write clean .md with filtered frontmatter + original body
+            agent_post = frontmatter.Post(source_post.content, **gemini_meta)
+            agent_file.write_text(frontmatter.dumps(agent_post) + "\n")
+
+            # Merge mcpServers into ~/.gemini/settings.json
+            if profile.mcpServers:
+                _merge_gemini_settings({"mcpServers": profile.mcpServers})
+                click.echo(f"\u2713 gemini settings updated: {GEMINI_SETTINGS_FILE}")
+
+            # Merge hooks into ~/.gemini/settings.json
+            if profile.hooks:
+                _merge_gemini_settings({"hooks": profile.hooks})
+                click.echo(f"\u2713 gemini hooks updated: {GEMINI_SETTINGS_FILE}")
 
         click.echo(f"✓ Agent '{profile.name}' installed successfully")
         click.echo(f"✓ Context file: {dest_file}")

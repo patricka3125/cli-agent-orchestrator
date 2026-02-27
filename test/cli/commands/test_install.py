@@ -307,3 +307,189 @@ class TestInstallCommand:
             result = runner.invoke(install, ["test-agent", "--provider", "claude_code"])
 
             assert "installed successfully" in result.output
+
+    @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.GEMINI_AGENTS_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
+    def test_install_gemini_strips_unsupported_frontmatter(
+        self, mock_local_store, mock_gemini_dir, mock_context_dir, mock_load, runner
+    ):
+        """Test Gemini install strips unsupported keys (mcpServers) from frontmatter."""
+        import frontmatter as fm
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Create profile with mcpServers (unsupported by Gemini subagent schema)
+            profile = MagicMock()
+            profile.name = "test-agent"
+            profile.description = "Test agent"
+            profile.tools = None
+            profile.allowedTools = None
+            profile.mcpServers = {"my-server": {"command": "test-cmd"}}
+            profile.prompt = None
+            profile.toolAliases = None
+            profile.toolsSettings = None
+            profile.hooks = None
+            profile.model = None
+
+            local_path = tmppath / "local"
+            local_path.mkdir(parents=True, exist_ok=True)
+            # Source file has mcpServers in frontmatter
+            source_content = "---\nname: test-agent\ndescription: Test agent\nmcpServers:\n  my-server:\n    command: test-cmd\n---\n\n# Test Agent\nSystem prompt body.\n"
+            local_profile = local_path / "test-agent.md"
+            local_profile.write_text(source_content)
+
+            gemini_path = tmppath / "gemini"
+            gemini_path.mkdir(parents=True, exist_ok=True)
+            settings_file = tmppath / "settings.json"
+
+            mock_local_store.__truediv__ = lambda self, x: local_path / x
+            mock_gemini_dir.__truediv__ = lambda self, x: gemini_path / x
+            mock_gemini_dir.mkdir = MagicMock()
+            mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
+            mock_context_dir.mkdir = MagicMock()
+
+            mock_load.return_value = profile
+
+            (tmppath / "context").mkdir(parents=True, exist_ok=True)
+
+            with patch(
+                "cli_agent_orchestrator.cli.commands.install.GEMINI_SETTINGS_FILE",
+                settings_file,
+            ):
+                result = runner.invoke(install, ["test-agent", "--provider", "gemini"])
+
+            assert "installed successfully" in result.output
+
+            # Verify the agent .md file has only name and description
+            agent_file = gemini_path / "test-agent.md"
+            assert agent_file.exists()
+            post = fm.loads(agent_file.read_text())
+            assert post.metadata["name"] == "test-agent"
+            assert post.metadata["description"] == "Test agent"
+            assert "mcpServers" not in post.metadata
+            assert "System prompt body." in post.content
+
+    @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.GEMINI_AGENTS_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
+    def test_install_gemini_merges_mcp_to_settings(
+        self, mock_local_store, mock_gemini_dir, mock_context_dir, mock_load, runner
+    ):
+        """Test Gemini install merges mcpServers into settings.json."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            profile = MagicMock()
+            profile.name = "test-agent"
+            profile.description = "Test agent"
+            profile.tools = None
+            profile.allowedTools = None
+            profile.mcpServers = {"cao-server": {"command": "uvx", "args": ["cao"]}}
+            profile.prompt = None
+            profile.toolAliases = None
+            profile.toolsSettings = None
+            profile.hooks = None
+            profile.model = None
+
+            local_path = tmppath / "local"
+            local_path.mkdir(parents=True, exist_ok=True)
+            local_profile = local_path / "test-agent.md"
+            local_profile.write_text("---\nname: test-agent\ndescription: Test agent\n---\n\n# Test\n")
+
+            gemini_path = tmppath / "gemini"
+            gemini_path.mkdir(parents=True, exist_ok=True)
+            settings_file = tmppath / "settings.json"
+
+            mock_local_store.__truediv__ = lambda self, x: local_path / x
+            mock_gemini_dir.__truediv__ = lambda self, x: gemini_path / x
+            mock_gemini_dir.mkdir = MagicMock()
+            mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
+            mock_context_dir.mkdir = MagicMock()
+
+            mock_load.return_value = profile
+
+            (tmppath / "context").mkdir(parents=True, exist_ok=True)
+
+            with patch(
+                "cli_agent_orchestrator.cli.commands.install.GEMINI_SETTINGS_FILE",
+                settings_file,
+            ):
+                result = runner.invoke(install, ["test-agent", "--provider", "gemini"])
+
+            assert "settings updated" in result.output
+
+            # Verify settings.json was created with mcpServers
+            settings = json.loads(settings_file.read_text())
+            assert "mcpServers" in settings
+            assert "cao-server" in settings["mcpServers"]
+            assert settings["mcpServers"]["cao-server"]["command"] == "uvx"
+
+    @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.GEMINI_AGENTS_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
+    def test_install_gemini_preserves_existing_settings(
+        self, mock_local_store, mock_gemini_dir, mock_context_dir, mock_load, runner
+    ):
+        """Test Gemini install preserves existing settings.json content when merging."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            profile = MagicMock()
+            profile.name = "test-agent"
+            profile.description = "Test agent"
+            profile.tools = None
+            profile.allowedTools = None
+            profile.mcpServers = {"new-server": {"command": "new-cmd"}}
+            profile.prompt = None
+            profile.toolAliases = None
+            profile.toolsSettings = None
+            profile.hooks = None
+            profile.model = None
+
+            local_path = tmppath / "local"
+            local_path.mkdir(parents=True, exist_ok=True)
+            local_profile = local_path / "test-agent.md"
+            local_profile.write_text("---\nname: test-agent\ndescription: Test agent\n---\n\n# Test\n")
+
+            gemini_path = tmppath / "gemini"
+            gemini_path.mkdir(parents=True, exist_ok=True)
+
+            # Pre-populate settings.json with existing content
+            settings_file = tmppath / "settings.json"
+            existing_settings = {
+                "general": {"vimMode": False},
+                "mcpServers": {"existing-server": {"command": "old-cmd"}},
+            }
+            settings_file.write_text(json.dumps(existing_settings))
+
+            mock_local_store.__truediv__ = lambda self, x: local_path / x
+            mock_gemini_dir.__truediv__ = lambda self, x: gemini_path / x
+            mock_gemini_dir.mkdir = MagicMock()
+            mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
+            mock_context_dir.mkdir = MagicMock()
+
+            mock_load.return_value = profile
+
+            (tmppath / "context").mkdir(parents=True, exist_ok=True)
+
+            with patch(
+                "cli_agent_orchestrator.cli.commands.install.GEMINI_SETTINGS_FILE",
+                settings_file,
+            ):
+                result = runner.invoke(install, ["test-agent", "--provider", "gemini"])
+
+            # Verify existing settings are preserved and new server was added
+            settings = json.loads(settings_file.read_text())
+            assert settings["general"]["vimMode"] is False
+            assert "existing-server" in settings["mcpServers"]
+            assert "new-server" in settings["mcpServers"]
+            assert settings["mcpServers"]["new-server"]["command"] == "new-cmd"
