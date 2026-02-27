@@ -203,6 +203,7 @@ class TestGeminiProviderTitleBasedStatus:
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_title_ready_is_idle(self, mock_tmux):
         mock_tmux.get_pane_title.return_value = "◇  Ready"
+        mock_tmux.get_history.return_value = "Model: Welcome to Gemini!\n"
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
         status = provider.get_status()
@@ -212,12 +213,46 @@ class TestGeminiProviderTitleBasedStatus:
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_title_ready_after_input_is_completed(self, mock_tmux):
         mock_tmux.get_pane_title.return_value = "◇  Ready"
+        mock_tmux.get_history.return_value = "Model: Here is the answer.\n"
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
         provider._input_received = True
         status = provider.get_status()
 
         assert status == TerminalStatus.COMPLETED
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_ready_no_model_marker_is_processing(self, mock_tmux):
+        """Title flickers to Ready before CLI produces first response."""
+        mock_tmux.get_pane_title.return_value = "◇  Ready"
+        mock_tmux.get_history.return_value = "Loading...\n"
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.PROCESSING
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_ready_empty_output_is_processing(self, mock_tmux):
+        """Title says Ready but pane content is empty → still booting."""
+        mock_tmux.get_pane_title.return_value = "◇  Ready"
+        mock_tmux.get_history.return_value = ""
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.PROCESSING
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_title_ready_history_error_is_processing(self, mock_tmux):
+        """If get_history raises while title is Ready, default to PROCESSING."""
+        mock_tmux.get_pane_title.return_value = "◇  Ready"
+        mock_tmux.get_history.side_effect = Exception("capture-pane failed")
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.PROCESSING
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_title_working_is_processing(self, mock_tmux):
@@ -271,6 +306,7 @@ class TestGeminiProviderTitleBasedStatus:
     def test_tail_lines_ignored(self, mock_tmux):
         """tail_lines parameter is accepted but unused (interface compat)."""
         mock_tmux.get_pane_title.return_value = "◇  Ready"
+        mock_tmux.get_history.return_value = "Model: Hello\n"
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
         status = provider.get_status(tail_lines=50)

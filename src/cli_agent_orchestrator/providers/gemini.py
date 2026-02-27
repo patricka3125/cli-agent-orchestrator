@@ -235,6 +235,21 @@ class GeminiProvider(BaseProvider):
             if "Working" in title:
                 return TerminalStatus.PROCESSING
             if "Ready" in title:
+                # Guard against the title flickering to "Ready" before the
+                # CLI has actually produced its first response (e.g. during
+                # boot when the -i system prompt hasn't been processed yet).
+                # Check pane content for the Model: response marker.
+                try:
+                    output = tmux_client.get_history(
+                        self.session_name, self.window_name, tail_lines=50
+                    )
+                    if not output or not re.search(
+                        RESPONSE_PATTERN, output, re.MULTILINE
+                    ):
+                        return TerminalStatus.PROCESSING
+                except Exception:
+                    return TerminalStatus.PROCESSING
+
                 if self._input_received:
                     return TerminalStatus.COMPLETED
                 return TerminalStatus.IDLE
