@@ -388,7 +388,10 @@ class TmuxClient:
                 raise ValueError(f"Window '{window_name}' not found in session '{session_name}'")
 
             pane = window.panes[0]
-            return pane.pane_title or ""
+            result = pane.cmd("display-message", "-p", "#{pane_title}")
+            if result.stdout:
+                return result.stdout[0].strip()
+            return ""
         except Exception as e:
             logger.error(f"Failed to get pane title from {session_name}:{window_name}: {e}")
             raise
