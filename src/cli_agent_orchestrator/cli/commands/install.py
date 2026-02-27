@@ -60,24 +60,32 @@ def _download_agent(source: str) -> str:
     raise FileNotFoundError(f"Source not found: {source}")
 
 
-def _merge_gemini_settings(updates: dict) -> None:
-    """Merge updates into ~/.gemini/settings.json (additive).
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge *overlay* into *base* (in-place).
 
-    Reads the existing settings file, merges the provided dict keys
-    into it, and writes back. For dict-valued keys (e.g., mcpServers),
-    existing entries are preserved and new ones are added/overwritten.
-    For list-valued keys (e.g., hooks event arrays), new items are appended.
+    For dict-valued keys, merge recursively so that existing nested keys
+    are preserved.  For all other types the overlay value wins.
+    """
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _merge_gemini_settings(updates: dict) -> None:
+    """Merge updates into ~/.gemini/settings.json (additive, deep).
+
+    Reads the existing settings file, deep-merges the provided dict into
+    it, and writes back.  Nested dict keys (e.g., ``ui.accessibility``)
+    are merged recursively so existing sibling keys are preserved.
     """
     settings: dict = {}
     if GEMINI_SETTINGS_FILE.exists():
         settings = json.loads(GEMINI_SETTINGS_FILE.read_text())
 
-    for key, value in updates.items():
-        if isinstance(value, dict) and isinstance(settings.get(key), dict):
-            # Dict merge: add new entries, overwrite matching keys
-            settings[key].update(value)
-        else:
-            settings[key] = value
+    _deep_merge(settings, updates)
 
     GEMINI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     GEMINI_SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")

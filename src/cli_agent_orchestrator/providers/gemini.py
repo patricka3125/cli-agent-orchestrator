@@ -1,8 +1,7 @@
 """Gemini CLI provider implementation.
 
 This module provides the GeminiProvider class for integrating with Google's
-Gemini CLI (gemini), an AI-powered coding assistant that operates through
-a full-screen terminal TUI (Ink-based).
+Gemini CLI (gemini), an AI-powered coding assistant.
 
 Gemini CLI Features:
 - Interactive chat with Gemini models
@@ -10,14 +9,17 @@ Gemini CLI Features:
 - YOLO mode for auto-accepting tool calls (--yolo / --approval-mode yolo)
 - System prompt injection via developer instructions
 - MCP server configuration
-- Full-screen TUI with status bar and input area
 
-The provider detects the following terminal states:
-- IDLE: Agent is waiting for user input (shows * prompt with placeholder text)
-- PROCESSING: Agent is generating a response (no idle prompt visible)
-- COMPLETED: Agent has finished responding (✦ response + * idle prompt)
-- WAITING_USER_ANSWER: Agent is waiting for user approval
-- ERROR: Agent encountered an error during processing
+The provider enforces ``ui.accessibility.screenReader = true`` and
+``ui.useAlternateBuffer = false`` in ``~/.gemini/settings.json`` before
+launching the CLI.  Screen-reader mode renders plain text (no Ink TUI),
+which simplifies status detection — the sole signal is the **dynamic
+window title** set via OSC escape sequences.
+
+Detected terminal states (from window title):
+- IDLE / COMPLETED: title contains ``Ready``
+- PROCESSING: title contains ``Working``
+- WAITING_USER_ANSWER: title contains ``Action Required``
 
 Input Submission:
 - Gemini CLI uses multi-line input; first Enter adds a newline, second
@@ -62,50 +64,18 @@ RESPONSE_PATTERN = rf"^{RESPONSE_MARKER}\s"
 # User input prompt: when a message is submitted, it shows "> message"
 USER_INPUT_PATTERN = r"^>\s+\S"
 
-# Idle prompt: the input area shows "* " followed by either user text or
-# the placeholder "Type your message or @path/to/file".
-# The * (U+002A) appears at the start of the input bar in the bottom portion
-# of the TUI. We check the last few lines for this.
-IDLE_PROMPT_PATTERN = r"^\s*\*\s"
 
-# Number of lines from bottom to check for idle prompt and TUI chrome.
-# Gemini CLI uses a full-screen TUI, so the idle prompt and status bar
-# are always rendered at the bottom.
-IDLE_PROMPT_TAIL_LINES = 8
-
-# Placeholder text shown in the input area when idle
-IDLE_PLACEHOLDER_PATTERN = r"Type your message"
-
-# TUI status bar / footer indicators
-TUI_FOOTER_PATTERN = r"\? for shortcuts"
-TUI_STATUS_BAR_PATTERN = r"(?:/model\s|no sandbox|YOLO)"
-
-# Processing indicator: Gemini shows a spinner/thinking indicator while
-# generating. The key signal is absence of the idle prompt (* ) in the
-# bottom lines.
-
-# Approval/permission prompt patterns (when not in YOLO mode)
-APPROVAL_PROMPT_PATTERN = r"(?:Allow|Approve|Confirm).*\?"
-
-# Error indicators
-ERROR_INDICATORS = [
-    "Error:",
-    "error:",
-    "Something went wrong",
-    "Unable to connect",
-    "rate limit",
-]
-
-# The idle prompt pattern for pipe-pane log files (raw stream).
-# In the raw TUI output, the * prompt is rendered with ANSI color codes.
-# The pattern matches the colored * followed by the placeholder or empty input.
-# Since Gemini uses a full-screen TUI (alternate screen), pipe-pane may not
-# capture useful output. We use the "? for shortcuts" footer text as a
-# reliable indicator that the TUI is active and rendered.
-IDLE_PROMPT_PATTERN_LOG = r"\? for shortcuts"
-
-# Separator lines used by Gemini CLI TUI (box drawing characters)
-SEPARATOR_PATTERN = r"^[─▀▄]{10,}"
+# Required settings merged into ~/.gemini/settings.json before every launch.
+# Screen-reader mode produces plain text (no Ink TUI) and alternate buffer
+# is disabled so tmux capture-pane works correctly.
+_REQUIRED_GEMINI_SETTINGS: dict = {
+    "ui": {
+        "useAlternateBuffer": False,
+        "accessibility": {
+            "screenReader": True,
+        },
+    },
+}
 
 
 class GeminiProvider(BaseProvider):
@@ -115,8 +85,9 @@ class GeminiProvider(BaseProvider):
     a tmux window, including initialization, status detection, and response
     extraction.
 
-    Gemini CLI runs as a full-screen Ink TUI (similar to Codex with alt screen).
-    Status detection uses tmux capture-pane to read the rendered screen.
+    Screen-reader mode (``ui.accessibility.screenReader = true``) is enforced
+    so that output is plain text.  Status detection relies exclusively on the
+    dynamic window title set by Gemini CLI.
 
     Attributes:
         terminal_id: Unique identifier for this terminal instance
@@ -177,14 +148,28 @@ class GeminiProvider(BaseProvider):
             return f"{base_cmd} {shlex.join(extra_args)}"
         return base_cmd
 
+    @staticmethod
+    def _ensure_gemini_settings() -> None:
+        """Merge required UI settings into ``~/.gemini/settings.json``.
+
+        Called before every launch so that screen-reader mode and
+        alternate-buffer settings are guaranteed to be present.
+        """
+        from cli_agent_orchestrator.cli.commands.install import (
+            _merge_gemini_settings,
+        )
+
+        _merge_gemini_settings(_REQUIRED_GEMINI_SETTINGS)
+
     def initialize(self) -> bool:
         """Initialize Gemini CLI provider by starting the gemini command.
 
         This method:
         1. Verifies npx is available on PATH
         2. Waits for the shell to be ready in the tmux window
-        3. Sends the gemini CLI command with --yolo flag
-        4. Waits for the agent to reach IDLE state (ready for input)
+        3. Merges required UI settings into settings.json
+        4. Sends the gemini CLI command with --yolo flag
+        5. Waits for the agent to reach IDLE state (ready for input)
 
         Returns:
             True if initialization was successful
@@ -205,11 +190,14 @@ class GeminiProvider(BaseProvider):
         if not wait_for_shell(tmux_client, self.session_name, self.window_name, timeout=10.0):
             raise TimeoutError("Shell initialization timed out after 10 seconds")
 
-        # Step 3: Build and send the Gemini CLI command
+        # Step 3: Ensure screen-reader mode + alt-buffer settings are in place
+        self._ensure_gemini_settings()
+
+        # Step 4: Build and send the Gemini CLI command
         command = self._build_gemini_command()
         tmux_client.send_keys(self.session_name, self.window_name, command)
 
-        # Step 4: Wait for Gemini CLI to fully initialize and show the idle prompt.
+        # Step 5: Wait for Gemini CLI to fully initialize and show the idle prompt.
         # Gemini CLI may take a while to start (npm/npx overhead + auth).
         if not wait_until_status(self, TerminalStatus.IDLE, timeout=60.0, polling_interval=1.0):
             raise TimeoutError("Gemini CLI initialization timed out after 60 seconds")
@@ -218,27 +206,24 @@ class GeminiProvider(BaseProvider):
         return True
 
     def get_status(self, tail_lines: Optional[int] = None) -> TerminalStatus:
-        """Get Gemini CLI status by analyzing the dynamic window title.
+        """Get Gemini CLI status from the dynamic window title.
 
-        Gemini CLI sets the terminal pane title via OSC escape sequences when
-        ``ui.dynamicWindowTitle`` is enabled (default). The title reflects the
-        agent's current state:
+        With screen-reader mode enabled, the Ink TUI is not rendered, so
+        capture-pane output no longer contains reliable status indicators.
+        The sole signal is the pane title set via OSC escape sequences:
 
         - ``◇  Ready``            → IDLE or COMPLETED
         - ``✦  Working...``       → PROCESSING
         - ``✋  Action Required``  → WAITING_USER_ANSWER
 
-        If the title is empty or unrecognized (pre-boot, feature disabled, or
-        an error state), we fall back to capture-pane output parsing.
+        Before the CLI boots (title is empty), we return PROCESSING.
 
         Args:
-            tail_lines: Number of lines to capture from terminal history
-                        (used only by the capture-pane fallback).
+            tail_lines: Unused — kept for interface compatibility.
 
         Returns:
             Current TerminalStatus enum value
         """
-        # --- Primary: window title ---
         try:
             title = tmux_client.get_pane_title(self.session_name, self.window_name)
         except Exception:
@@ -254,101 +239,23 @@ class GeminiProvider(BaseProvider):
                     return TerminalStatus.COMPLETED
                 return TerminalStatus.IDLE
 
-        # --- Fallback: capture-pane output parsing ---
-        return self._get_status_from_output(tail_lines=tail_lines)
-
-    def _get_status_from_output(self, tail_lines: Optional[int] = None) -> TerminalStatus:
-        """Fallback status detection by analyzing captured terminal output.
-
-        Used when the pane title is empty or unrecognized (e.g., before the
-        TUI boots, when ``ui.dynamicWindowTitle`` is disabled, or for error
-        detection which the title does not cover).
-
-        Status detection logic (in priority order):
-        1. No output → ERROR
-        2. Check bottom lines for idle prompt (* )
-        3. If idle prompt found + ✦ response marker → COMPLETED
-        4. If idle prompt found + no response → IDLE
-        5. If approval prompt visible → WAITING_USER_ANSWER
-        6. Error indicators → ERROR
-        7. Default → PROCESSING
-
-        Args:
-            tail_lines: Number of lines to capture from terminal history.
-
-        Returns:
-            Current TerminalStatus enum value
-        """
-        output = tmux_client.get_history(self.session_name, self.window_name, tail_lines=tail_lines)
-
-        if not output:
-            return TerminalStatus.ERROR
-
-        # Strip ANSI codes for reliable pattern matching
-        clean_output = re.sub(ANSI_CODE_PATTERN, "", output)
-
-        # Get the bottom lines where the TUI chrome lives
-        all_lines = clean_output.splitlines()
-        bottom_lines = all_lines[-IDLE_PROMPT_TAIL_LINES:]
-
-        # Check for the idle prompt (* ) in the bottom portion of the screen
-        has_idle_prompt = any(
-            re.search(IDLE_PROMPT_PATTERN, line) for line in bottom_lines
-        )
-
-        # Check for TUI footer (? for shortcuts) to confirm TUI is rendered
-        has_tui_footer = any(
-            re.search(TUI_FOOTER_PATTERN, line) for line in all_lines
-        )
-
-        if not has_tui_footer:
-            # TUI hasn't rendered yet or has crashed
-            # Check for error indicators in raw output
-            for indicator in ERROR_INDICATORS:
-                if indicator.lower() in clean_output.lower():
-                    return TerminalStatus.ERROR
-            return TerminalStatus.PROCESSING
-
-        # Check for approval prompts (when not in YOLO mode)
-        if re.search(APPROVAL_PROMPT_PATTERN, clean_output, re.IGNORECASE):
-            return TerminalStatus.WAITING_USER_ANSWER
-
-        # Check for error indicators
-        for indicator in ERROR_INDICATORS:
-            if indicator.lower() in clean_output.lower():
-                # Only count as error if we also have an idle prompt
-                # (error message displayed, agent returned to prompt)
-                if has_idle_prompt:
-                    return TerminalStatus.ERROR
-
-        if has_idle_prompt:
-            # Check if there's a completed response (✦ marker) in the output
-            # Look for ✦ in the main content area (above the input bar)
-            has_response = bool(re.search(RESPONSE_PATTERN, clean_output, re.MULTILINE))
-
-            if has_response and self._input_received:
-                return TerminalStatus.COMPLETED
-
-            # Idle with no response (or pre-first-input)
-            return TerminalStatus.IDLE
-
-        # No idle prompt visible — agent is processing
+        # Title empty or unrecognized — CLI is still booting
         return TerminalStatus.PROCESSING
 
     def get_idle_pattern_for_log(self) -> str:
-        """Return Gemini CLI IDLE prompt pattern for log files.
+        """Return pattern for detecting IDLE in pipe-pane log files.
 
-        Since Gemini CLI uses a full-screen TUI, the raw pipe-pane output
-        may contain TUI escape sequences. We use the footer text as indicator.
+        With screen-reader mode the ✦ response marker is still present in
+        plain-text output and can be used as a signal.
         """
-        return IDLE_PROMPT_PATTERN_LOG
+        return RESPONSE_PATTERN
 
     def extract_last_message_from_script(self, script_output: str) -> str:
         """Extract Gemini's final response message using ✦ indicator.
 
         Gemini CLI marks each response with ✦ (U+2726). We find the last
-        occurrence and extract the text between it and the next idle prompt
-        or separator.
+        occurrence and extract the text between it and the next user-input
+        prompt (``> ``) or another ✦ marker.
 
         Args:
             script_output: Raw terminal output/script content
@@ -372,7 +279,7 @@ class GeminiProvider(BaseProvider):
         last_match = matches[-1]
         start_pos = last_match.start()
 
-        # Extract everything after the last ✦ until the next separator or input area
+        # Extract everything after the last ✦ until a stop marker
         remaining_text = clean_output[start_pos:]
 
         # Split by lines and collect response lines
@@ -388,16 +295,7 @@ class GeminiProvider(BaseProvider):
                     response_lines.append(clean_line)
                 continue
 
-            # Stop at TUI chrome lines (separator bars, status bar, input prompt)
-            stripped = line.strip()
-            if re.match(SEPARATOR_PATTERN, stripped):
-                break
-            if re.search(TUI_FOOTER_PATTERN, line):
-                break
-            if re.search(TUI_STATUS_BAR_PATTERN, line):
-                break
-            if re.match(r"^\s*\*\s", line):
-                break
+            # Stop at user-input prompt (> ) which signals end of response
             if re.match(r"^\s*>\s", line):
                 break
 
