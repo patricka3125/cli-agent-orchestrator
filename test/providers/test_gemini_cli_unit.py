@@ -274,8 +274,9 @@ class TestGeminiProviderTitleBasedStatus:
 
     @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
     def test_empty_title_is_processing(self, mock_tmux):
-        """When title is empty (pre-boot), status should be PROCESSING."""
+        """When title is empty (pre-boot) and no errors, status should be PROCESSING."""
         mock_tmux.get_pane_title.return_value = ""
+        mock_tmux.get_history.return_value = "Loading...\n"
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
         status = provider.get_status()
@@ -296,6 +297,56 @@ class TestGeminiProviderTitleBasedStatus:
     def test_unrecognized_title_is_processing(self, mock_tmux):
         """Unrecognized title text should default to PROCESSING."""
         mock_tmux.get_pane_title.return_value = "Some random title"
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.PROCESSING
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_empty_title_with_error_in_pane_is_error(self, mock_tmux):
+        """When title is empty and pane contains error text, return ERROR."""
+        mock_tmux.get_pane_title.return_value = ""
+        mock_tmux.get_history.return_value = (
+            "Error: Unable to connect to Gemini API. Please check your authentication.\n"
+        )
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.ERROR
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_empty_title_with_fatal_error_is_error(self, mock_tmux):
+        """FATAL: prefix is also detected as ERROR."""
+        mock_tmux.get_pane_title.return_value = ""
+        mock_tmux.get_history.return_value = "FATAL: out of memory\n"
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.ERROR
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_empty_title_with_traceback_is_error(self, mock_tmux):
+        """Python traceback in pane content is detected as ERROR."""
+        mock_tmux.get_pane_title.return_value = ""
+        mock_tmux.get_history.return_value = (
+            "Traceback (most recent call last):\n"
+            "  File \"main.py\", line 1\n"
+            "RuntimeError: crash\n"
+        )
+
+        provider = GeminiProvider("test1234", "test-session", "window-0")
+        status = provider.get_status()
+
+        assert status == TerminalStatus.ERROR
+
+    @patch("cli_agent_orchestrator.providers.gemini.tmux_client")
+    def test_empty_title_history_exception_falls_back_to_processing(self, mock_tmux):
+        """If get_history raises during error check, still return PROCESSING."""
+        mock_tmux.get_pane_title.return_value = ""
+        mock_tmux.get_history.side_effect = Exception("tmux gone")
 
         provider = GeminiProvider("test1234", "test-session", "window-0")
         status = provider.get_status()

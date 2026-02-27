@@ -1,9 +1,5 @@
-╭──────────────────────────────────────────────────────╮
-│ ✦ Welcome to Gemini CLI!                             │
-│                                                      │
-│ model: gemini-2.5-pro (Auto)                         │
-│ directory: ~/project                                 │
-╰──────────────────────────────────────────────────────╯
+Gemini CLI v0.3.0
 
-*   Type your message or @path/to/file
-? for shortcuts                                                            YOLO
+Model: Welcome to the project! I'm ready to help you with your coding tasks.
+
+> 

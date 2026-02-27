@@ -64,6 +64,11 @@ RESPONSE_PATTERN = rf"^{RESPONSE_MARKER}\s"
 # User input prompt: when a message is submitted, it shows "> message"
 USER_INPUT_PATTERN = r"^>\s+\S"
 
+# Error patterns in pane content indicating the CLI has crashed or hit a fatal error.
+# Checked when the window title is empty (CLI exited) to distinguish a crash from
+# normal boot delay.
+ERROR_PATTERN = r"^(?:Error:|ERROR:|FATAL:|panic:|Traceback \(most recent call last\):)"
+
 
 # Required settings merged into ~/.gemini/settings.json before every launch.
 # Screen-reader mode produces plain text (no Ink TUI) and alternate buffer
@@ -254,7 +259,17 @@ class GeminiProvider(BaseProvider):
                     return TerminalStatus.COMPLETED
                 return TerminalStatus.IDLE
 
-        # Title empty or unrecognized — CLI is still booting
+        # Title empty or unrecognized — CLI may be booting or may have crashed.
+        # Check pane content for error indicators to avoid hanging forever.
+        try:
+            output = tmux_client.get_history(
+                self.session_name, self.window_name, tail_lines=30
+            )
+            if output and re.search(ERROR_PATTERN, output, re.MULTILINE):
+                return TerminalStatus.ERROR
+        except Exception:
+            pass
+
         return TerminalStatus.PROCESSING
 
     def get_idle_pattern_for_log(self) -> str:
