@@ -168,3 +168,20 @@ def test_list_providers():
         "t1": "CodexProvider",
         "t2": "ClaudeCodeProvider",
     }
+
+
+def test_create_provider_gemini():
+    """Test creating Gemini provider."""
+    from cli_agent_orchestrator.providers.gemini import GeminiProvider
+
+    manager = ProviderManager()
+    provider = manager.create_provider(
+        ProviderType.GEMINI.value,
+        terminal_id="t1",
+        tmux_session="s1",
+        tmux_window="w1",
+        agent_profile=None,
+    )
+
+    assert isinstance(provider, GeminiProvider)
+    assert manager.get_provider("t1") is provider

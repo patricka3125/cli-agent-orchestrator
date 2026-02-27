@@ -30,9 +30,9 @@ class TestGeminiProviderInitialization:
         assert result is True
         assert provider._initialized is True
         mock_wait_shell.assert_called_once()
-        mock_tmux.send_keys.assert_called_once_with(
-            "test-session", "window-0", "npx @google/gemini-cli --yolo"
-        )
+        sent_command = mock_tmux.send_keys.call_args.args[2]
+        assert "CAO_TERMINAL_ID=test1234" in sent_command
+        assert "npx @google/gemini-cli --yolo" in sent_command
         mock_wait_status.assert_called_once()
 
     @patch("cli_agent_orchestrator.providers.gemini.wait_for_shell")
@@ -62,7 +62,14 @@ class TestGeminiBuildCommand:
     def test_build_command_no_profile(self):
         provider = GeminiProvider("test1234", "test-session", "window-0", None)
         command = provider._build_gemini_command()
-        assert command == "npx @google/gemini-cli --yolo"
+        assert command == "CAO_TERMINAL_ID=test1234 npx @google/gemini-cli --yolo"
+
+    def test_build_command_includes_terminal_id(self):
+        """CAO_TERMINAL_ID is set as inline env var for MCP env expansion."""
+        provider = GeminiProvider("term-abc-123", "test-session", "window-0", None)
+        command = provider._build_gemini_command()
+        assert command.startswith("CAO_TERMINAL_ID=term-abc-123 ")
+        assert "npx @google/gemini-cli --yolo" in command
 
     @patch("cli_agent_orchestrator.providers.gemini.load_agent_profile")
     def test_build_command_with_agent_profile(self, mock_load_profile):
@@ -103,7 +110,7 @@ class TestGeminiBuildCommand:
         provider = GeminiProvider("test1234", "test-session", "window-0", "empty_agent")
         command = provider._build_gemini_command()
 
-        assert command == "npx @google/gemini-cli --yolo"
+        assert command == "CAO_TERMINAL_ID=test1234 npx @google/gemini-cli --yolo"
         assert "-i" not in command
 
     @patch("cli_agent_orchestrator.providers.gemini.load_agent_profile")
@@ -116,7 +123,7 @@ class TestGeminiBuildCommand:
         provider = GeminiProvider("test1234", "test-session", "window-0", "none_agent")
         command = provider._build_gemini_command()
 
-        assert command == "npx @google/gemini-cli --yolo"
+        assert command == "CAO_TERMINAL_ID=test1234 npx @google/gemini-cli --yolo"
 
     @patch("cli_agent_orchestrator.providers.gemini.load_agent_profile")
     def test_build_command_profile_load_failure(self, mock_load_profile):

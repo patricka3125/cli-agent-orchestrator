@@ -154,45 +154,29 @@ class GeminiProvider(BaseProvider):
         Returns properly escaped shell command string that can be safely
         sent via tmux.
         """
-        command_parts = ["npx", "@google/gemini-cli", "--yolo"]
+        # Set CAO_TERMINAL_ID as inline env var so Gemini CLI can expand
+        # $CAO_TERMINAL_ID in MCP server env blocks (settings.json).
+        base_cmd = (
+            f"CAO_TERMINAL_ID={shlex.quote(self.terminal_id)} "
+            f"npx @google/gemini-cli --yolo"
+        )
+        extra_args = []
 
         if self._agent_profile is not None:
             try:
                 profile = load_agent_profile(self._agent_profile)
 
-                # Add system prompt via --prompt-interactive for initial instruction
-                # Note: Gemini CLI doesn't have a direct --append-system-prompt flag
-                # like Claude Code. The system prompt can be set via GEMINI.md files
-                # or passed as initial prompt with -i (prompt-interactive).
-                # For agent profiles, we'll use the initial interactive prompt approach.
                 system_prompt = profile.system_prompt if profile.system_prompt is not None else ""
                 if system_prompt:
-                    # Use -i to send the system prompt as an initial message
-                    # and continue in interactive mode
                     escaped_prompt = system_prompt.replace("\\", "\\\\").replace("\n", "\\n")
-                    command_parts.extend(["-i", escaped_prompt])
-
-                # Add MCP config if present.
-                # Gemini CLI supports MCP servers via its configuration.
-                # We pass them via the settings file or command line if supported.
-                if profile.mcpServers:
-                    # Gemini CLI MCP server configuration
-                    for server_name, server_config in profile.mcpServers.items():
-                        if isinstance(server_config, dict):
-                            cfg = server_config
-                        else:
-                            cfg = server_config.model_dump(exclude_none=True)
-
-                        # Inject CAO_TERMINAL_ID into server env
-                        env = cfg.get("env", {})
-                        if "CAO_TERMINAL_ID" not in env:
-                            env["CAO_TERMINAL_ID"] = self.terminal_id
-                            cfg["env"] = env
+                    extra_args.extend(["-i", escaped_prompt])
 
             except Exception as e:
                 raise ProviderError(f"Failed to load agent profile '{self._agent_profile}': {e}")
 
-        return shlex.join(command_parts)
+        if extra_args:
+            return f"{base_cmd} {shlex.join(extra_args)}"
+        return base_cmd
 
     def initialize(self) -> bool:
         """Initialize Gemini CLI provider by starting the gemini command.

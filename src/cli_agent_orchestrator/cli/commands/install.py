@@ -210,7 +210,15 @@ def install(agent_source: str, provider: str):
             # Merge mcpServers into ~/.gemini/settings.json
             gemini_settings_updated = False
             if profile.mcpServers:
-                _merge_gemini_settings({"mcpServers": profile.mcpServers})
+                servers = {}
+                for name, cfg in profile.mcpServers.items():
+                    srv = dict(cfg) if isinstance(cfg, dict) else cfg.model_dump(exclude_none=True)
+                    # Inject $CAO_TERMINAL_ID for env var expansion at runtime.
+                    # Gemini CLI expands $VAR_NAME in env blocks automatically.
+                    env = srv.setdefault("env", {})
+                    env.setdefault("CAO_TERMINAL_ID", "$CAO_TERMINAL_ID")
+                    servers[name] = srv
+                _merge_gemini_settings({"mcpServers": servers})
                 gemini_settings_updated = True
 
             # Merge hooks into ~/.gemini/settings.json
