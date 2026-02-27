@@ -208,19 +208,22 @@ def install(agent_source: str, provider: str):
             agent_file.write_text(frontmatter.dumps(agent_post) + "\n")
 
             # Merge mcpServers into ~/.gemini/settings.json
+            gemini_settings_updated = False
             if profile.mcpServers:
                 _merge_gemini_settings({"mcpServers": profile.mcpServers})
-                click.echo(f"\u2713 gemini settings updated: {GEMINI_SETTINGS_FILE}")
+                gemini_settings_updated = True
 
             # Merge hooks into ~/.gemini/settings.json
             if profile.hooks:
                 _merge_gemini_settings({"hooks": profile.hooks})
-                click.echo(f"\u2713 gemini hooks updated: {GEMINI_SETTINGS_FILE}")
+                gemini_settings_updated = True
 
         click.echo(f"✓ Agent '{profile.name}' installed successfully")
         click.echo(f"✓ Context file: {dest_file}")
         if agent_file:
             click.echo(f"✓ {provider} agent: {agent_file}")
+        if provider == ProviderType.GEMINI.value and gemini_settings_updated:
+            click.echo(f"✓ gemini settings updated: {GEMINI_SETTINGS_FILE}")
 
     except FileNotFoundError as e:
         click.echo(f"Error: {e}", err=True)
