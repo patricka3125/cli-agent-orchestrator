@@ -5,9 +5,11 @@ from pathlib import Path
 
 import click
 import requests
+import yaml
 
 from cli_agent_orchestrator.constants import (
     AGENT_CONTEXT_DIR,
+    CLAUDE_AGENTS_DIR,
     DEFAULT_PROVIDER,
     KIRO_AGENTS_DIR,
     LOCAL_AGENT_STORE_DIR,
@@ -156,6 +158,38 @@ def install(agent_source: str, provider: str):
             agent_file = KIRO_AGENTS_DIR / f"{safe_filename}.json"
             with open(agent_file, "w") as f:
                 f.write(agent_config.model_dump_json(indent=2, exclude_none=True))
+
+        elif provider == ProviderType.CLAUDE_CODE.value:
+            CLAUDE_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+            # Build Claude subagent frontmatter
+            frontmatter_dict = {
+                "name": profile.name,
+                "description": profile.description,
+                "permissionMode": "bypassPermissions",
+            }
+
+            # Add optional fields if present in profile
+            if profile.tools is not None:
+                frontmatter_dict["tools"] = profile.tools
+            if profile.allowedTools is not None:
+                frontmatter_dict["allowedTools"] = profile.allowedTools
+            if profile.mcpServers is not None:
+                frontmatter_dict["mcpServers"] = profile.mcpServers
+            if profile.model is not None:
+                frontmatter_dict["model"] = profile.model
+            if profile.hooks is not None:
+                frontmatter_dict["hooks"] = profile.hooks
+
+            # Build the full markdown file with YAML frontmatter
+            yaml_content = yaml.dump(frontmatter_dict, sort_keys=False)
+            system_prompt = profile.system_prompt if profile.system_prompt is not None else ""
+            full_content = f"---\n{yaml_content}---\n\n{system_prompt}"
+
+            safe_filename = profile.name.replace("/", "__")
+            agent_file = CLAUDE_AGENTS_DIR / f"{safe_filename}.md"
+            with open(agent_file, "w") as f:
+                f.write(full_content)
 
         click.echo(f"✓ Agent '{profile.name}' installed successfully")
         click.echo(f"✓ Context file: {dest_file}")

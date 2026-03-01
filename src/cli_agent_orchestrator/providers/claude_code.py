@@ -70,13 +70,10 @@ class ClaudeCodeProvider(BaseProvider):
             try:
                 profile = load_agent_profile(self._agent_profile)
 
-                # Add system prompt - escape newlines to prevent tmux chunking issues
-                system_prompt = profile.system_prompt if profile.system_prompt is not None else ""
-                if system_prompt:
-                    # Replace actual newlines with \n escape sequences
-                    # This prevents tmux send_keys chunking from breaking the command
-                    escaped_prompt = system_prompt.replace("\\", "\\\\").replace("\n", "\\n")
-                    command_parts.extend(["--append-system-prompt", escaped_prompt])
+                # Use --agents flag to reference the pre-installed Claude subagent
+                # The agent should be installed first with:
+                # cao install <agent_name> --provider claude_code
+                command_parts.extend(["--agents", profile.name])
 
                 # Add MCP config if present.
                 # Forward CAO_TERMINAL_ID so MCP servers (e.g. cao-mcp-server)
