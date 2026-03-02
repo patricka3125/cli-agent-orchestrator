@@ -79,17 +79,21 @@ class TestClaudeCodeProviderInitialization:
         assert result is True
         mock_load.assert_called_once_with("test-agent")
 
+    @patch("cli_agent_orchestrator.providers.claude_code._load_claude_agent_profile")
     @patch("cli_agent_orchestrator.providers.claude_code.wait_for_shell")
     @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
     @patch("cli_agent_orchestrator.providers.claude_code.tmux_client")
-    def test_initialize_with_invalid_agent_profile(self, mock_tmux, mock_load, mock_wait_shell):
+    def test_initialize_with_invalid_agent_profile(
+        self, mock_tmux, mock_load, mock_wait_shell, mock_claude_load
+    ):
         """Test initialization with invalid agent profile."""
         mock_wait_shell.return_value = True
         mock_load.side_effect = FileNotFoundError("Profile not found")
+        mock_claude_load.return_value = None
 
         provider = ClaudeCodeProvider("test123", "test-session", "window-0", "invalid-agent")
 
-        with pytest.raises(ProviderError, match="Failed to load agent profile"):
+        with pytest.raises(ProviderError, match="not found in CAO store"):
             provider.initialize()
 
     @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
@@ -449,6 +453,156 @@ class TestClaudeCodeProviderMisc:
         server_env = mcp_data["mcpServers"]["my-server"]["env"]
         # Should keep the user-provided value, NOT overwrite with term-99
         assert server_env["CAO_TERMINAL_ID"] == "user-provided-id"
+
+
+class TestClaudeCodeProviderAgentFallback:
+    """Tests for agent profile resolution from Claude Code directories."""
+
+    @patch("cli_agent_orchestrator.providers.claude_code._load_claude_agent_profile")
+    @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
+    def test_build_command_falls_back_to_claude_global_agent(self, mock_load, mock_claude_load):
+        """Test _build_claude_command uses global Claude agent when not in CAO store."""
+        mock_load.side_effect = RuntimeError("Not found")
+        mock_claude_load.return_value = {"name": "my-agent", "mcpServers": None}
+
+        provider = ClaudeCodeProvider("test123", "test-session", "window-0", "my-agent")
+        command = provider._build_claude_command()
+
+        assert "--agents my-agent" in command
+        mock_claude_load.assert_called_once()
+
+    @patch("cli_agent_orchestrator.providers.claude_code._load_claude_agent_profile")
+    @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
+    def test_build_command_falls_back_to_claude_agent_with_mcp(self, mock_load, mock_claude_load):
+        """Test fallback to Claude agent with MCP config injects CAO_TERMINAL_ID."""
+        mock_load.side_effect = RuntimeError("Not found")
+        mock_claude_load.return_value = {
+            "name": "my-agent",
+            "mcpServers": {"cao-mcp-server": {"command": "cao-mcp-server"}},
+        }
+
+        provider = ClaudeCodeProvider("term-77", "test-session", "window-0", "my-agent")
+        command = provider._build_claude_command()
+
+        assert "--agents my-agent" in command
+        assert "--mcp-config" in command
+        # Verify CAO_TERMINAL_ID injection
+        parts = command.split("--mcp-config ")
+        mcp_json_str = parts[1].strip()
+        if mcp_json_str.startswith("'") and mcp_json_str.endswith("'"):
+            mcp_json_str = mcp_json_str[1:-1]
+        mcp_data = json.loads(mcp_json_str)
+        assert mcp_data["mcpServers"]["cao-mcp-server"]["env"]["CAO_TERMINAL_ID"] == "term-77"
+
+    @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
+    def test_build_command_cao_store_takes_priority(self, mock_load):
+        """Test CAO agent store is checked before Claude directories (no fallback needed)."""
+        mock_profile = MagicMock()
+        mock_profile.name = "my-agent"
+        mock_profile.mcpServers = None
+        mock_load.return_value = mock_profile
+
+        provider = ClaudeCodeProvider("test123", "test-session", "window-0", "my-agent")
+        command = provider._build_claude_command()
+
+        assert "--agents my-agent" in command
+        mock_load.assert_called_once_with("my-agent")
+
+    def test_load_claude_agent_profile_from_global_dir(self, tmp_path):
+        """Test _load_claude_agent_profile finds agent in global directory."""
+        from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
+
+        agent_file = tmp_path / "test-agent.md"
+        agent_file.write_text("---\nname: test-agent\ndescription: Test\n---\nSystem prompt")
+
+        with patch(
+            "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR", tmp_path
+        ):
+            result = _load_claude_agent_profile("test-agent")
+
+        assert result is not None
+        assert result["name"] == "test-agent"
+
+    def test_load_claude_agent_profile_from_project_dir(self, tmp_path):
+        """Test _load_claude_agent_profile finds agent in project directory."""
+        from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
+
+        project_dir = tmp_path / "my-project"
+        agents_dir = project_dir / ".claude" / "agents"
+        agents_dir.mkdir(parents=True)
+        agent_file = agents_dir / "proj-agent.md"
+        agent_file.write_text("---\nname: proj-agent\ndescription: Project agent\n---\nPrompt")
+
+        with patch(
+            "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR",
+            tmp_path / "empty",
+        ):
+            result = _load_claude_agent_profile("proj-agent", str(project_dir))
+
+        assert result is not None
+        assert result["name"] == "proj-agent"
+
+    def test_load_claude_agent_profile_project_takes_priority(self, tmp_path):
+        """Test project-level agent takes priority over global."""
+        from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
+
+        # Create global agent
+        global_dir = tmp_path / "global"
+        global_dir.mkdir()
+        (global_dir / "shared-agent.md").write_text(
+            "---\nname: global-shared\ndescription: Global\n---\n"
+        )
+
+        # Create project-level agent with same filename
+        project_dir = tmp_path / "project"
+        proj_agents = project_dir / ".claude" / "agents"
+        proj_agents.mkdir(parents=True)
+        (proj_agents / "shared-agent.md").write_text(
+            "---\nname: project-shared\ndescription: Project\n---\n"
+        )
+
+        with patch(
+            "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR", global_dir
+        ):
+            result = _load_claude_agent_profile("shared-agent", str(project_dir))
+
+        assert result is not None
+        assert result["name"] == "project-shared"  # Project wins
+
+    def test_load_claude_agent_profile_with_mcp_servers(self, tmp_path):
+        """Test _load_claude_agent_profile extracts mcpServers from frontmatter."""
+        from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
+
+        agent_content = (
+            "---\n"
+            "name: mcp-agent\n"
+            "description: Agent with MCP\n"
+            "mcpServers:\n"
+            "  cao-mcp-server:\n"
+            "    command: cao-mcp-server\n"
+            "---\nSystem prompt"
+        )
+        (tmp_path / "mcp-agent.md").write_text(agent_content)
+
+        with patch(
+            "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR", tmp_path
+        ):
+            result = _load_claude_agent_profile("mcp-agent")
+
+        assert result is not None
+        assert "mcpServers" in result
+        assert "cao-mcp-server" in result["mcpServers"]
+
+    def test_load_claude_agent_profile_not_found(self, tmp_path):
+        """Test _load_claude_agent_profile returns None when agent not found."""
+        from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
+
+        with patch(
+            "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR", tmp_path
+        ):
+            result = _load_claude_agent_profile("nonexistent")
+
+        assert result is None
 
 
 class TestClaudeCodeProviderTrustPrompt:
