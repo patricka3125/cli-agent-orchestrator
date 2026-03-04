@@ -86,17 +86,16 @@ class TestClaudeCodeProviderInitialization:
     def test_initialize_with_invalid_agent_profile(
         self, mock_tmux, mock_load, mock_wait_shell, mock_load_claude
     ):
-        """Test initialization with invalid agent profile not found in CAO store or Claude dirs."""
+        """Test initialization with invalid agent profile not found in CAO store or global dir."""
         mock_wait_shell.return_value = True
-        # CAO store raises → falls through to Claude directory lookup
+        # CAO store raises → falls through to global Claude directory lookup
         mock_load.side_effect = FileNotFoundError("Profile not found")
-        mock_tmux.get_pane_working_directory.return_value = None
-        # Claude directory lookup also returns None → ProviderError raised
+        # Global directory lookup also returns None → ProviderError raised
         mock_load_claude.return_value = None
 
         provider = ClaudeCodeProvider("test123", "test-session", "window-0", "invalid-agent")
 
-        with pytest.raises(ProviderError, match="not found in CAO store or Claude Code agent directories"):
+        with pytest.raises(ProviderError, match="not found in CAO store or global Claude Code agent directory"):
             provider.initialize()
 
     @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
@@ -584,81 +583,28 @@ class TestClaudeCodeProviderTrustPrompt:
 class TestLoadClaudeAgentProfile:
     """Tests for the module-level _load_claude_agent_profile helper."""
 
-    def test_finds_project_level_agent(self, tmp_path):
-        """Project-level agent (.claude/agents/) is returned when it exists."""
+    def test_finds_global_agent(self, tmp_path):
+        """Returns agent profile from the global ~/.claude/agents/ directory."""
         from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
 
-        agent_dir = tmp_path / ".claude" / "agents"
-        agent_dir.mkdir(parents=True)
-        (agent_dir / "my-agent.md").write_text(
-            "---\nname: my-agent\ndescription: test\n---\nDo stuff."
-        )
-
-        with (
-            patch(
-                "cli_agent_orchestrator.providers.claude_code.CLAUDE_PROJECT_AGENTS_DIR",
-                agent_dir.relative_to(tmp_path),
-            ),
-        ):
-            result = _load_claude_agent_profile("my-agent", working_directory=str(tmp_path))
-
-        assert result is not None
-        assert result["name"] == "my-agent"
-        assert "mcpServers" not in result
-
-    def test_finds_global_agent_when_no_project_agent(self, tmp_path):
-        """Falls back to global ~/.claude/agents/ when no project-level agent exists."""
-        from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
-
-        global_dir = tmp_path / "global_claude" / "agents"
+        global_dir = tmp_path / "agents"
         global_dir.mkdir(parents=True)
-        (global_dir / "global-agent.md").write_text(
-            "---\nname: global-agent\ndescription: global\n---\nGlobal prompt."
+        (global_dir / "my-agent.md").write_text(
+            "---\nname: my-agent\ndescription: test\n---\nDo stuff."
         )
 
         with patch(
             "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR",
             global_dir,
         ):
-            # Pass a working directory that has no .claude/agents/
-            result = _load_claude_agent_profile("global-agent", working_directory=str(tmp_path))
+            result = _load_claude_agent_profile("my-agent")
 
         assert result is not None
-        assert result["name"] == "global-agent"
-
-    def test_project_level_takes_priority_over_global(self, tmp_path):
-        """Project-level agent wins when both project and global agents exist."""
-        from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
-
-        project_dir = tmp_path / ".claude" / "agents"
-        project_dir.mkdir(parents=True)
-        (project_dir / "shared-agent.md").write_text(
-            "---\nname: project-version\ndescription: project\n---\nProject prompt."
-        )
-
-        global_dir = tmp_path / "global" / "agents"
-        global_dir.mkdir(parents=True)
-        (global_dir / "shared-agent.md").write_text(
-            "---\nname: global-version\ndescription: global\n---\nGlobal prompt."
-        )
-
-        with (
-            patch(
-                "cli_agent_orchestrator.providers.claude_code.CLAUDE_PROJECT_AGENTS_DIR",
-                project_dir.relative_to(tmp_path),
-            ),
-            patch(
-                "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR",
-                global_dir,
-            ),
-        ):
-            result = _load_claude_agent_profile("shared-agent", working_directory=str(tmp_path))
-
-        assert result is not None
-        assert result["name"] == "project-version"
+        assert result["name"] == "my-agent"
+        assert "mcpServers" not in result
 
     def test_returns_none_when_not_found(self, tmp_path):
-        """Returns None when agent is not found in either location."""
+        """Returns None when the agent file does not exist in the global directory."""
         from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
 
         empty_dir = tmp_path / "agents"
@@ -668,43 +614,25 @@ class TestLoadClaudeAgentProfile:
             "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR",
             empty_dir,
         ):
-            result = _load_claude_agent_profile("nonexistent", working_directory=str(tmp_path))
+            result = _load_claude_agent_profile("nonexistent")
 
         assert result is None
 
-    def test_continues_on_parse_error_and_falls_back(self, tmp_path):
-        """Continues to next path when frontmatter parsing fails."""
+    def test_returns_none_on_parse_error(self, tmp_path):
+        """Returns None when the frontmatter cannot be parsed (logs a warning)."""
         from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
 
-        # Project-level file with broken YAML frontmatter
-        project_dir = tmp_path / ".claude" / "agents"
-        project_dir.mkdir(parents=True)
-        (project_dir / "fragile-agent.md").write_text(
-            "---\nname: [invalid yaml\n---\nBody."
-        )
-
-        # Global file with valid frontmatter
-        global_dir = tmp_path / "global" / "agents"
+        global_dir = tmp_path / "agents"
         global_dir.mkdir(parents=True)
-        (global_dir / "fragile-agent.md").write_text(
-            "---\nname: fragile-agent\ndescription: ok\n---\nGlobal body."
-        )
+        (global_dir / "bad-agent.md").write_text("---\nname: [invalid yaml\n---\nBody.")
 
-        with (
-            patch(
-                "cli_agent_orchestrator.providers.claude_code.CLAUDE_PROJECT_AGENTS_DIR",
-                project_dir.relative_to(tmp_path),
-            ),
-            patch(
-                "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR",
-                global_dir,
-            ),
+        with patch(
+            "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR",
+            global_dir,
         ):
-            result = _load_claude_agent_profile("fragile-agent", working_directory=str(tmp_path))
+            result = _load_claude_agent_profile("bad-agent")
 
-        # Falls back to valid global agent
-        assert result is not None
-        assert result["name"] == "fragile-agent"
+        assert result is None
 
     def test_includes_mcp_servers_when_present(self, tmp_path):
         """Returns mcpServers from frontmatter when present."""
@@ -727,61 +655,35 @@ class TestLoadClaudeAgentProfile:
         assert "mcpServers" in result
         assert "my-server" in result["mcpServers"]
 
-    def test_no_working_directory_skips_project_level(self, tmp_path):
-        """When working_directory is None, project-level search is skipped."""
+    def test_uses_filename_as_name_fallback(self, tmp_path):
+        """Falls back to agent_name when 'name' key is absent from frontmatter."""
         from cli_agent_orchestrator.providers.claude_code import _load_claude_agent_profile
 
         global_dir = tmp_path / "agents"
         global_dir.mkdir(parents=True)
-        (global_dir / "nodir-agent.md").write_text(
-            "---\nname: nodir-agent\ndescription: ok\n---\nBody."
+        # Frontmatter exists but has no 'name' key
+        (global_dir / "unnamed-agent.md").write_text(
+            "---\ndescription: no name here\n---\nBody."
         )
 
         with patch(
             "cli_agent_orchestrator.providers.claude_code.CLAUDE_AGENTS_DIR",
             global_dir,
         ):
-            result = _load_claude_agent_profile("nodir-agent", working_directory=None)
+            result = _load_claude_agent_profile("unnamed-agent")
 
         assert result is not None
-        assert result["name"] == "nodir-agent"
-
-
-class TestGetWorkingDirectory:
-    """Tests for ClaudeCodeProvider._get_working_directory."""
-
-    @patch("cli_agent_orchestrator.providers.claude_code.tmux_client")
-    def test_returns_working_directory_on_success(self, mock_tmux):
-        """Returns the pane working directory when tmux_client succeeds."""
-        mock_tmux.get_pane_working_directory.return_value = "/home/user/project"
-
-        provider = ClaudeCodeProvider("test123", "test-session", "window-0")
-        result = provider._get_working_directory()
-
-        assert result == "/home/user/project"
-        mock_tmux.get_pane_working_directory.assert_called_once_with("test-session", "window-0")
-
-    @patch("cli_agent_orchestrator.providers.claude_code.tmux_client")
-    def test_returns_none_on_exception(self, mock_tmux):
-        """Returns None instead of raising when tmux_client raises."""
-        mock_tmux.get_pane_working_directory.side_effect = RuntimeError("pane not found")
-
-        provider = ClaudeCodeProvider("test123", "test-session", "window-0")
-        result = provider._get_working_directory()
-
-        assert result is None
+        assert result["name"] == "unnamed-agent"
 
 
 class TestBuildClaudeCommandClaudeFallback:
-    """Tests for the Claude Code agent directory fallback in _build_claude_command."""
+    """Tests for the global Claude Code agent directory fallback in _build_claude_command."""
 
     @patch("cli_agent_orchestrator.providers.claude_code._load_claude_agent_profile")
     @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
-    @patch("cli_agent_orchestrator.providers.claude_code.tmux_client")
-    def test_falls_back_to_claude_agent_directory(self, mock_tmux, mock_load, mock_load_claude):
-        """When CAO store misses, uses Claude agent directory profile."""
+    def test_falls_back_to_global_claude_agent_directory(self, mock_load, mock_load_claude):
+        """When CAO store misses, uses the global Claude agent directory profile."""
         mock_load.side_effect = FileNotFoundError("not in CAO store")
-        mock_tmux.get_pane_working_directory.return_value = "/project"
         mock_load_claude.return_value = {"name": "claude-native-agent"}
 
         provider = ClaudeCodeProvider("test123", "test-session", "window-0", "claude-native-agent")
@@ -790,15 +692,13 @@ class TestBuildClaudeCommandClaudeFallback:
         assert "--agent" in command
         assert "claude-native-agent" in command
         assert "--mcp-config" not in command
-        mock_load_claude.assert_called_once_with("claude-native-agent", "/project")
+        mock_load_claude.assert_called_once_with("claude-native-agent")
 
     @patch("cli_agent_orchestrator.providers.claude_code._load_claude_agent_profile")
     @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
-    @patch("cli_agent_orchestrator.providers.claude_code.tmux_client")
-    def test_claude_fallback_with_mcp_servers(self, mock_tmux, mock_load, mock_load_claude):
-        """Claude fallback path injects CAO_TERMINAL_ID when profile has mcpServers."""
+    def test_claude_fallback_with_mcp_servers(self, mock_load, mock_load_claude):
+        """Global Claude fallback path injects CAO_TERMINAL_ID when profile has mcpServers."""
         mock_load.side_effect = FileNotFoundError("not in CAO store")
-        mock_tmux.get_pane_working_directory.return_value = "/project"
         mock_load_claude.return_value = {
             "name": "claude-mcp-agent",
             "mcpServers": {"my-server": {"command": "my-cmd", "args": []}},
@@ -818,18 +718,16 @@ class TestBuildClaudeCommandClaudeFallback:
 
     @patch("cli_agent_orchestrator.providers.claude_code._load_claude_agent_profile")
     @patch("cli_agent_orchestrator.providers.claude_code.load_agent_profile")
-    @patch("cli_agent_orchestrator.providers.claude_code.tmux_client")
-    def test_raises_provider_error_when_not_found_anywhere(
-        self, mock_tmux, mock_load, mock_load_claude
-    ):
-        """Raises ProviderError when agent is not found in CAO store or Claude directories."""
+    def test_raises_provider_error_when_not_found_anywhere(self, mock_load, mock_load_claude):
+        """Raises ProviderError when agent is not found in CAO store or global directory."""
         mock_load.side_effect = FileNotFoundError("not in CAO store")
-        mock_tmux.get_pane_working_directory.return_value = None
         mock_load_claude.return_value = None
 
         provider = ClaudeCodeProvider("test123", "test-session", "window-0", "missing-agent")
 
         with pytest.raises(
-            ProviderError, match="not found in CAO store or Claude Code agent directories"
+            ProviderError, match="not found in CAO store or global Claude Code agent directory"
         ):
             provider._build_claude_command()
+
+

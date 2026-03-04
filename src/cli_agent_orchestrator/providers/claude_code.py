@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 import frontmatter
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
-from cli_agent_orchestrator.constants import CLAUDE_AGENTS_DIR, CLAUDE_PROJECT_AGENTS_DIR
+from cli_agent_orchestrator.constants import CLAUDE_AGENTS_DIR
 from cli_agent_orchestrator.models.terminal import TerminalStatus
 from cli_agent_orchestrator.providers.base import BaseProvider
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile
@@ -44,44 +44,28 @@ TRUST_PROMPT_PATTERN = r"Yes, I trust this folder"  # Workspace trust dialog
 IDLE_PROMPT_PATTERN_LOG = r"[>❯][\s\xa0]"  # Same pattern for log files
 
 
-def _load_claude_agent_profile(
-    agent_name: str, working_directory: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
-    """Search Claude Code's own agent directories for an agent profile.
+def _load_claude_agent_profile(agent_name: str) -> Optional[Dict[str, Any]]:
+    """Search the global Claude Code agent directory for an agent profile.
 
-    Searches project-level (.claude/agents/) first, then global (~/.claude/agents/).
-    Project-level agents take priority, matching Claude Code's own resolution order.
+    Searches only the global (~/.claude/agents/) directory.
 
     Args:
         agent_name: Name of the agent to find (without .md extension)
-        working_directory: Working directory to resolve project-level agents from
 
     Returns:
         Dict with 'name' and optional 'mcpServers' keys, or None if not found.
     """
-    search_paths = []
-
-    # Project-level agents first (higher priority in Claude Code's resolution)
-    if working_directory:
-        project_path = Path(working_directory) / CLAUDE_PROJECT_AGENTS_DIR / f"{agent_name}.md"
-        search_paths.append(project_path)
-
-    # Global agents second
-    global_path = CLAUDE_AGENTS_DIR / f"{agent_name}.md"
-    search_paths.append(global_path)
-
-    for agent_path in search_paths:
-        if agent_path.exists():
-            try:
-                parsed = frontmatter.loads(agent_path.read_text())
-                result: Dict[str, Any] = {"name": parsed.metadata.get("name", agent_name)}
-                if "mcpServers" in parsed.metadata:
-                    result["mcpServers"] = parsed.metadata["mcpServers"]
-                logger.info(f"Found Claude agent profile at: {agent_path}")
-                return result
-            except Exception as e:
-                logger.warning(f"Failed to parse Claude agent profile at {agent_path}: {e}")
-                continue
+    agent_path = CLAUDE_AGENTS_DIR / f"{agent_name}.md"
+    if agent_path.exists():
+        try:
+            parsed = frontmatter.loads(agent_path.read_text())
+            result: Dict[str, Any] = {"name": parsed.metadata.get("name", agent_name)}
+            if "mcpServers" in parsed.metadata:
+                result["mcpServers"] = parsed.metadata["mcpServers"]
+            logger.info(f"Found Claude agent profile at: {agent_path}")
+            return result
+        except Exception as e:
+            logger.warning(f"Failed to parse Claude agent profile at {agent_path}: {e}")
 
     return None
 
@@ -100,12 +84,6 @@ class ClaudeCodeProvider(BaseProvider):
         self._initialized = False
         self._agent_profile = agent_profile
 
-    def _get_working_directory(self) -> Optional[str]:
-        """Get the current working directory of the tmux pane."""
-        try:
-            return tmux_client.get_pane_working_directory(self.session_name, self.window_name)
-        except Exception:
-            return None
 
     def _inject_mcp_terminal_id(
         self, mcp_servers: Dict[str, Any], command_parts: list
@@ -137,7 +115,7 @@ class ClaudeCodeProvider(BaseProvider):
 
         Searches for agent profiles in this order:
         1. CAO agent store (local + built-in via load_agent_profile)
-        2. Claude Code agent directories (project-level .claude/agents/ + global ~/.claude/agents/)
+        2. Global Claude Code agent directory (~/.claude/agents/)
 
         Returns properly escaped shell command string that can be safely sent via tmux.
         Uses shlex.join() to handle multiline strings and special characters correctly.
@@ -167,16 +145,13 @@ class ClaudeCodeProvider(BaseProvider):
                 if profile.mcpServers:
                     self._inject_mcp_terminal_id(profile.mcpServers, command_parts)
             else:
-                # Fall back to Claude Code's own agent directories
-                working_dir = self._get_working_directory()
-                claude_profile = _load_claude_agent_profile(
-                    self._agent_profile, working_dir
-                )
+                # Fall back to global Claude Code agent directory (~/.claude/agents/)
+                claude_profile = _load_claude_agent_profile(self._agent_profile)
 
                 if claude_profile is None:
                     raise ProviderError(
                         f"Agent profile '{self._agent_profile}' not found in CAO store "
-                        f"or Claude Code agent directories"
+                        f"or global Claude Code agent directory"
                     )
 
                 command_parts.extend(["--agent", claude_profile["name"]])
