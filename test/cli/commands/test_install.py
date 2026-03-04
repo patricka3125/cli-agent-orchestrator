@@ -282,12 +282,13 @@ class TestInstallCommand:
             mock_load.assert_called_once_with("test-agent")
 
     @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.CLAUDE_AGENTS_DIR")
     @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
     @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
-    def test_install_without_provider_specific_config(
-        self, mock_local_store, mock_context_dir, mock_load, runner, mock_agent_profile
+    def test_install_claude_code_provider(
+        self, mock_local_store, mock_context_dir, mock_claude_dir, mock_load, runner, mock_agent_profile
     ):
-        """Test installing agent for claude_code provider (no agent file created)."""
+        """Test installing agent for claude_code provider writes correct .md file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
 
@@ -296,10 +297,16 @@ class TestInstallCommand:
             local_profile = local_path / "test-agent.md"
             local_profile.write_text("# Test\nname: test-agent")
 
+            claude_dir = tmppath / "claude_agents"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+
             mock_local_store.__truediv__ = lambda self, x: local_path / x
             mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
             mock_context_dir.mkdir = MagicMock()
+            mock_claude_dir.__truediv__ = lambda self, x: claude_dir / x
+            mock_claude_dir.mkdir = MagicMock()
 
+            mock_agent_profile.system_prompt = "Do the thing."
             mock_load.return_value = mock_agent_profile
 
             (tmppath / "context").mkdir(parents=True, exist_ok=True)
@@ -307,3 +314,108 @@ class TestInstallCommand:
             result = runner.invoke(install, ["test-agent", "--provider", "claude_code"])
 
             assert "installed successfully" in result.output
+
+            # Verify the .md file was written with correct content
+            agent_file = claude_dir / "test-agent.md"
+            assert agent_file.exists(), f"Expected {agent_file} to be created"
+            content = agent_file.read_text()
+
+            assert "---" in content
+            assert "name: test-agent" in content
+            assert "permissionMode: bypassPermissions" in content
+            assert "Do the thing." in content
+
+    @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.CLAUDE_AGENTS_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
+    def test_install_claude_code_no_system_prompt(
+        self, mock_local_store, mock_context_dir, mock_claude_dir, mock_load, runner, mock_agent_profile
+    ):
+        """Test Claude Code install when system_prompt is None produces empty body."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            local_path = tmppath / "local"
+            local_path.mkdir(parents=True, exist_ok=True)
+            (local_path / "test-agent.md").write_text("# Test\nname: test-agent")
+
+            claude_dir = tmppath / "claude_agents"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+
+            mock_local_store.__truediv__ = lambda self, x: local_path / x
+            mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
+            mock_context_dir.mkdir = MagicMock()
+            mock_claude_dir.__truediv__ = lambda self, x: claude_dir / x
+            mock_claude_dir.mkdir = MagicMock()
+
+            mock_agent_profile.system_prompt = None
+            mock_load.return_value = mock_agent_profile
+
+            (tmppath / "context").mkdir(parents=True, exist_ok=True)
+
+            result = runner.invoke(install, ["test-agent", "--provider", "claude_code"])
+
+            assert "installed successfully" in result.output
+            agent_file = claude_dir / "test-agent.md"
+            assert agent_file.exists()
+            content = agent_file.read_text()
+            # Body should be empty (just trailing newlines after ---)
+            assert content.endswith("---\n\n")
+
+    @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.CLAUDE_AGENTS_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
+    def test_install_claude_code_slash_in_name_sanitized(
+        self, mock_local_store, mock_context_dir, mock_claude_dir, mock_load, runner
+    ):
+        """Test that slashes in agent name are replaced with __ in the output filename.
+
+        agent_name='org/sub-agent' → LOCAL_AGENT_STORE_DIR/'org'/'sub-agent.md'
+        and AGENT_CONTEXT_DIR/'org'/'sub-agent.md', so those subdirs must exist.
+        The Claude Code output file must be flattened: 'org__sub-agent.md'.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # LOCAL_AGENT_STORE_DIR / "org/sub-agent.md" resolves to local/org/sub-agent.md
+            local_path = tmppath / "local"
+            (local_path / "org").mkdir(parents=True, exist_ok=True)
+            (local_path / "org" / "sub-agent.md").write_text("# Test\nname: org/sub-agent")
+
+            claude_dir = tmppath / "claude_agents"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+
+            # AGENT_CONTEXT_DIR / "org/sub-agent.md" → context/org/sub-agent.md
+            # parent dir must exist for dest_file.write_text() to succeed
+            (tmppath / "context" / "org").mkdir(parents=True, exist_ok=True)
+
+            mock_local_store.__truediv__ = lambda self, x: local_path / x
+            mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
+            mock_context_dir.mkdir = MagicMock()
+            mock_claude_dir.__truediv__ = lambda self, x: claude_dir / x
+            mock_claude_dir.mkdir = MagicMock()
+
+            slash_profile = MagicMock()
+            slash_profile.name = "org/sub-agent"
+            slash_profile.description = "Test"
+            slash_profile.system_prompt = None
+            slash_profile.tools = None
+            slash_profile.allowedTools = None
+            slash_profile.mcpServers = None
+            slash_profile.model = None
+            slash_profile.hooks = None
+            mock_load.return_value = slash_profile
+
+            result = runner.invoke(install, ["org/sub-agent", "--provider", "claude_code"])
+
+            assert "installed successfully" in result.output, (
+                f"Unexpected output: {result.output}"
+            )
+            # Filename should use __ instead of / — must not create a subdirectory
+            sanitized_file = claude_dir / "org__sub-agent.md"
+            assert sanitized_file.exists(), (
+                f"Expected sanitized filename 'org__sub-agent.md'; "
+                f"claude_dir contents: {list(claude_dir.iterdir())}"
+            )

@@ -155,7 +155,7 @@ class ClaudeCodeProvider(BaseProvider):
             # Try CAO agent store first
             try:
                 profile = load_agent_profile(self._agent_profile)
-            except Exception:
+            except (FileNotFoundError, ValueError):
                 logger.debug(
                     f"Agent '{self._agent_profile}' not found in CAO store, "
                     "searching Claude Code agent directories"
