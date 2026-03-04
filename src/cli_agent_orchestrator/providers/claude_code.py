@@ -163,7 +163,7 @@ class ClaudeCodeProvider(BaseProvider):
 
             if profile is not None:
                 # Found in CAO store — use profile name and MCP config
-                command_parts.extend(["--agents", profile.name])
+                command_parts.extend(["--agent", profile.name])
                 if profile.mcpServers:
                     self._inject_mcp_terminal_id(profile.mcpServers, command_parts)
             else:
@@ -179,7 +179,7 @@ class ClaudeCodeProvider(BaseProvider):
                         f"or Claude Code agent directories"
                     )
 
-                command_parts.extend(["--agents", claude_profile["name"]])
+                command_parts.extend(["--agent", claude_profile["name"]])
                 if claude_profile.get("mcpServers"):
                     self._inject_mcp_terminal_id(claude_profile["mcpServers"], command_parts)
 
