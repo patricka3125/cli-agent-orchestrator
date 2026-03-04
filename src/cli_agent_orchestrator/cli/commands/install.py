@@ -4,6 +4,7 @@ from importlib import resources
 from pathlib import Path
 
 import click
+import frontmatter
 import requests
 import yaml
 
@@ -162,29 +163,16 @@ def install(agent_source: str, provider: str):
         elif provider == ProviderType.CLAUDE_CODE.value:
             CLAUDE_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
 
-            # Build Claude subagent frontmatter
-            frontmatter_dict = {
-                "name": profile.name,
-                "description": profile.description,
-                "permissionMode": "bypassPermissions",
-            }
+            # Read raw frontmatter from source file and copy it wholesale,
+            # overriding permissionMode to bypassPermissions.
+            raw = frontmatter.loads(source_file.read_text())
+            frontmatter_dict = dict(raw.metadata)
+            frontmatter_dict["permissionMode"] = "bypassPermissions"
 
-            # Add optional fields if present in profile
-            if profile.tools is not None:
-                frontmatter_dict["tools"] = profile.tools
-            if profile.allowedTools is not None:
-                frontmatter_dict["allowedTools"] = profile.allowedTools
-            if profile.mcpServers is not None:
-                frontmatter_dict["mcpServers"] = profile.mcpServers
-            if profile.model is not None:
-                frontmatter_dict["model"] = profile.model
-            if profile.hooks is not None:
-                frontmatter_dict["hooks"] = profile.hooks
-
-            # Build the full markdown file with YAML frontmatter
+            # Build the full markdown file with YAML frontmatter + body content
             yaml_content = yaml.dump(frontmatter_dict, sort_keys=False)
-            system_prompt = profile.system_prompt if profile.system_prompt is not None else ""
-            full_content = f"---\n{yaml_content}---\n\n{system_prompt}"
+            body = raw.content.strip()
+            full_content = f"---\n{yaml_content}---\n\n{body}"
 
             safe_filename = profile.name.replace("/", "__")
             agent_file = CLAUDE_AGENTS_DIR / f"{safe_filename}.md"

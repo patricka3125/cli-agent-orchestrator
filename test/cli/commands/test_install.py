@@ -288,14 +288,21 @@ class TestInstallCommand:
     def test_install_claude_code_provider(
         self, mock_local_store, mock_context_dir, mock_claude_dir, mock_load, runner, mock_agent_profile
     ):
-        """Test installing agent for claude_code provider writes correct .md file."""
+        """Test installing agent for claude_code provider writes correct .md file.
+
+        The entire source file frontmatter is passed through wholesale; only
+        permissionMode is forced to bypassPermissions.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
 
             local_path = tmppath / "local"
             local_path.mkdir(parents=True, exist_ok=True)
+            # Source has real YAML frontmatter + body — both should appear in output.
             local_profile = local_path / "test-agent.md"
-            local_profile.write_text("# Test\nname: test-agent")
+            local_profile.write_text(
+                "---\nname: test-agent\ndescription: Test agent description\n---\n\nDo the thing."
+            )
 
             claude_dir = tmppath / "claude_agents"
             claude_dir.mkdir(parents=True, exist_ok=True)
@@ -306,7 +313,6 @@ class TestInstallCommand:
             mock_claude_dir.__truediv__ = lambda self, x: claude_dir / x
             mock_claude_dir.mkdir = MagicMock()
 
-            mock_agent_profile.system_prompt = "Do the thing."
             mock_load.return_value = mock_agent_profile
 
             (tmppath / "context").mkdir(parents=True, exist_ok=True)
@@ -323,6 +329,7 @@ class TestInstallCommand:
             assert "---" in content
             assert "name: test-agent" in content
             assert "permissionMode: bypassPermissions" in content
+            # Body is taken wholesale from the source file, not from profile.system_prompt
             assert "Do the thing." in content
 
     @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
@@ -332,13 +339,16 @@ class TestInstallCommand:
     def test_install_claude_code_no_system_prompt(
         self, mock_local_store, mock_context_dir, mock_claude_dir, mock_load, runner, mock_agent_profile
     ):
-        """Test Claude Code install when system_prompt is None produces empty body."""
+        """Test Claude Code install when source file has no body produces empty body."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
 
             local_path = tmppath / "local"
             local_path.mkdir(parents=True, exist_ok=True)
-            (local_path / "test-agent.md").write_text("# Test\nname: test-agent")
+            # Source file has frontmatter but no body content
+            (local_path / "test-agent.md").write_text(
+                "---\nname: test-agent\ndescription: Test agent description\n---\n"
+            )
 
             claude_dir = tmppath / "claude_agents"
             claude_dir.mkdir(parents=True, exist_ok=True)
@@ -349,7 +359,6 @@ class TestInstallCommand:
             mock_claude_dir.__truediv__ = lambda self, x: claude_dir / x
             mock_claude_dir.mkdir = MagicMock()
 
-            mock_agent_profile.system_prompt = None
             mock_load.return_value = mock_agent_profile
 
             (tmppath / "context").mkdir(parents=True, exist_ok=True)
@@ -360,7 +369,7 @@ class TestInstallCommand:
             agent_file = claude_dir / "test-agent.md"
             assert agent_file.exists()
             content = agent_file.read_text()
-            # Body should be empty (just trailing newlines after ---)
+            # Body is empty — file should end with the closing --- and two newlines
             assert content.endswith("---\n\n")
 
     @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
@@ -382,7 +391,10 @@ class TestInstallCommand:
             # LOCAL_AGENT_STORE_DIR / "org/sub-agent.md" resolves to local/org/sub-agent.md
             local_path = tmppath / "local"
             (local_path / "org").mkdir(parents=True, exist_ok=True)
-            (local_path / "org" / "sub-agent.md").write_text("# Test\nname: org/sub-agent")
+            # Source file needs proper YAML frontmatter so frontmatter.loads() works correctly
+            (local_path / "org" / "sub-agent.md").write_text(
+                "---\nname: org/sub-agent\ndescription: Test\n---\n"
+            )
 
             claude_dir = tmppath / "claude_agents"
             claude_dir.mkdir(parents=True, exist_ok=True)
@@ -419,3 +431,59 @@ class TestInstallCommand:
                 f"Expected sanitized filename 'org__sub-agent.md'; "
                 f"claude_dir contents: {list(claude_dir.iterdir())}"
             )
+
+    @patch("cli_agent_orchestrator.cli.commands.install.load_agent_profile")
+    @patch("cli_agent_orchestrator.cli.commands.install.CLAUDE_AGENTS_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.AGENT_CONTEXT_DIR")
+    @patch("cli_agent_orchestrator.cli.commands.install.LOCAL_AGENT_STORE_DIR")
+    def test_install_claude_code_extra_frontmatter_passthrough(
+        self, mock_local_store, mock_context_dir, mock_claude_dir, mock_load, runner, mock_agent_profile
+    ):
+        """Test that extra frontmatter fields in the source file are preserved in output.
+
+        The new implementation copies the entire source frontmatter wholesale rather
+        than cherry-picking known fields, so any extra keys should appear verbatim.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            local_path = tmppath / "local"
+            local_path.mkdir(parents=True, exist_ok=True)
+            # Include an extra field (customTag) that AgentProfile doesn't model
+            (local_path / "test-agent.md").write_text(
+                "---\n"
+                "name: test-agent\n"
+                "description: Test agent description\n"
+                "model: claude-opus-4-5\n"
+                "customTag: some-value\n"
+                "---\n\n"
+                "System prompt body."
+            )
+
+            claude_dir = tmppath / "claude_agents"
+            claude_dir.mkdir(parents=True, exist_ok=True)
+
+            mock_local_store.__truediv__ = lambda self, x: local_path / x
+            mock_context_dir.__truediv__ = lambda self, x: tmppath / "context" / x
+            mock_context_dir.mkdir = MagicMock()
+            mock_claude_dir.__truediv__ = lambda self, x: claude_dir / x
+            mock_claude_dir.mkdir = MagicMock()
+
+            mock_load.return_value = mock_agent_profile
+            (tmppath / "context").mkdir(parents=True, exist_ok=True)
+
+            result = runner.invoke(install, ["test-agent", "--provider", "claude_code"])
+
+            assert "installed successfully" in result.output
+            agent_file = claude_dir / "test-agent.md"
+            assert agent_file.exists()
+            content = agent_file.read_text()
+
+            # All source frontmatter fields should be present in output
+            assert "name: test-agent" in content
+            assert "model: claude-opus-4-5" in content
+            assert "customTag: some-value" in content
+            # permissionMode is forced in
+            assert "permissionMode: bypassPermissions" in content
+            # Body is preserved
+            assert "System prompt body." in content
