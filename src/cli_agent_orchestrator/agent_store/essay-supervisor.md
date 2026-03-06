@@ -6,11 +6,7 @@ permissionMode: bypassPermissions
 mcpServers:
   cao-mcp-server:
     type: stdio
-    command: uvx
-    args:
-    - --from
-    - /home/bajablast69/dev/cli-agent-orchestrator
-    - cao-mcp-server
+    command: cao-mcp-server
     env:
       CAO_ENABLE_SENDER_ID_INJECTION: "true"
 ---

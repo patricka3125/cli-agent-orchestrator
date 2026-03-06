@@ -1,17 +1,13 @@
 ---
+name: essay-reviewer
 description: Reviews essays for quality, clarity, structure, and provides actionable
   feedback
 mcpServers:
   cao-mcp-server:
-    args:
-    - --from
-    - /home/bajablast69/dev/cli-agent-orchestrator
-    - cao-mcp-server
-    command: uvx
+    command: cao-mcp-server
     type: stdio
     env:
       CAO_ENABLE_SENDER_ID_INJECTION: "true"
-name: essay-reviewer
 permissionMode: bypassPermissions
 ---
 
