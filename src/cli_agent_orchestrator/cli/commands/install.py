@@ -103,10 +103,13 @@ def install(agent_source: str, provider: str):
             agent_store = resources.files("cli_agent_orchestrator.agent_store")
             source_file = agent_store / f"{agent_name}.md"
 
+        # Read source file once — reused for context copy and Claude Code install
+        with open(source_file, "r") as src:
+            source_content = src.read()
+
         # Copy markdown file to agent-context directory
         dest_file = AGENT_CONTEXT_DIR / f"{profile.name}.md"
-        with open(source_file, "r") as src:
-            dest_file.write_text(src.read())
+        dest_file.write_text(source_content)
 
         # Build allowedTools default if not specified
         allowed_tools = profile.allowedTools
@@ -162,9 +165,9 @@ def install(agent_source: str, provider: str):
         elif provider == ProviderType.CLAUDE_CODE.value:
             CLAUDE_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
 
-            # Read raw frontmatter from source file and copy it wholesale,
+            # Parse frontmatter from the already-read source content,
             # overriding permissionMode to bypassPermissions.
-            raw = frontmatter.loads(source_file.read_text())
+            raw = frontmatter.loads(source_content)
             raw.metadata["permissionMode"] = "bypassPermissions"
 
             # Use frontmatter.dumps() for safe round-tripping

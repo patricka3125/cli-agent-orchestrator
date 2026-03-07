@@ -12,6 +12,7 @@ import frontmatter
 
 from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.constants import CLAUDE_AGENTS_DIR
+from cli_agent_orchestrator.models.claude_agent import ClaudeAgentConfig
 from cli_agent_orchestrator.models.terminal import TerminalStatus
 from cli_agent_orchestrator.providers.base import BaseProvider
 from cli_agent_orchestrator.utils.agent_profiles import load_agent_profile
@@ -45,29 +46,55 @@ IDLE_PROMPT_PATTERN_LOG = r"[>❯][\s\xa0]"  # Same pattern for log files
 
 
 def _load_claude_agent_profile(agent_name: str) -> Optional[Dict[str, Any]]:
-    """Search the global Claude Code agent directory for an agent profile.
+    """Resolve an agent profile from global Claude dir or CAO agent store.
 
-    Searches only the global (~/.claude/agents/) directory.
+    Resolution order:
+    1. Global Claude Code directory (~/.claude/agents/)
+    2. CAO agent store (local + built-in via load_agent_profile)
 
     Args:
         agent_name: Name of the agent to find (without .md extension)
 
     Returns:
-        Dict with 'name' and optional 'mcpServers' keys, or None if not found.
+        Dict with 'source' ('global'|'cao'), 'name', 'description', and
+        optional config keys (mcpServers, model, tools, allowedTools, hooks,
+        system_prompt), or None if not found anywhere.
     """
+    # 1) Try global ~/.claude/agents/ directory
     agent_path = CLAUDE_AGENTS_DIR / f"{agent_name}.md"
     if agent_path.exists():
         try:
             parsed = frontmatter.loads(agent_path.read_text())
-            result: Dict[str, Any] = {"name": parsed.metadata.get("name", agent_name)}
-            if "mcpServers" in parsed.metadata:
-                result["mcpServers"] = parsed.metadata["mcpServers"]
-            logger.info(f"Found Claude agent profile at: {agent_path}")
+            meta = parsed.metadata
+            result: Dict[str, Any] = {
+                "source": "global",
+                "name": meta.get("name", agent_name),
+                "description": meta.get("description", ""),
+            }
+            for key in ("mcpServers", "model", "tools", "allowedTools", "hooks"):
+                if key in meta:
+                    result[key] = meta[key]
+            logger.info("Found Claude agent profile at: %s", agent_path)
             return result
         except Exception as e:
-            logger.warning(f"Failed to parse Claude agent profile at {agent_path}: {e}")
+            logger.warning("Failed to parse Claude agent profile at %s: %s", agent_path, e)
 
-    return None
+    # 2) Fallback to CAO agent store (local + built-in)
+    try:
+        profile = load_agent_profile(agent_name)
+        return {
+            "source": "cao",
+            "name": profile.name,
+            "description": profile.description,
+            "system_prompt": profile.system_prompt,
+            "model": profile.model,
+            "tools": profile.tools,
+            "allowedTools": profile.allowedTools,
+            "mcpServers": profile.mcpServers,
+            "hooks": profile.hooks,
+        }
+    except (FileNotFoundError, ValueError, RuntimeError):
+        return None
 
 
 class ClaudeCodeProvider(BaseProvider):
@@ -127,26 +154,36 @@ class ClaudeCodeProvider(BaseProvider):
         command_parts = ["claude", "--dangerously-skip-permissions"]
 
         if self._agent_profile is not None:
-            # Try global Claude Code agent directory first (~/.claude/agents/)
-            claude_profile = _load_claude_agent_profile(self._agent_profile)
+            resolved = _load_claude_agent_profile(self._agent_profile)
+            if resolved is None:
+                raise ProviderError(
+                    f"Agent profile '{self._agent_profile}' not found in "
+                    f"global Claude Code agent directory or CAO store"
+                )
 
-            if claude_profile is not None:
-                command_parts.extend(["--agent", claude_profile["name"]])
-                if claude_profile.get("mcpServers"):
-                    self._inject_mcp_terminal_id(claude_profile["mcpServers"], command_parts)
+            # Global profiles use --agent; CAO-only profiles use --append-system-prompt
+            if resolved["source"] == "global":
+                command_parts.extend(["--agent", resolved["name"]])
             else:
-                # Fall back to CAO agent store (local + built-in)
-                try:
-                    profile = load_agent_profile(self._agent_profile)
-                except (FileNotFoundError, ValueError):
-                    raise ProviderError(
-                        f"Agent profile '{self._agent_profile}' not found in "
-                        f"global Claude Code agent directory or CAO store"
-                    )
+                system_prompt = resolved.get("system_prompt") or ""
+                if system_prompt:
+                    escaped = system_prompt.replace("\\", "\\\\").replace("\n", "\\n")
+                    command_parts.extend(["--append-system-prompt", escaped])
 
-                command_parts.extend(["--agent", profile.name])
-                if profile.mcpServers:
-                    self._inject_mcp_terminal_id(profile.mcpServers, command_parts)
+            # Build CLI flags from resolved profile (model, tools, hooks, etc.)
+            config = ClaudeAgentConfig(
+                name=resolved["name"],
+                description=resolved.get("description", ""),
+                model=resolved.get("model"),
+                allowedTools=resolved.get("allowedTools"),
+                tools=resolved.get("tools"),
+                mcpServers=resolved.get("mcpServers"),
+                hooks=resolved.get("hooks"),
+            )
+            command_parts.extend(config.to_cli_flags())
+
+            if config.mcpServers:
+                self._inject_mcp_terminal_id(config.mcpServers, command_parts)
 
         # Use shlex.join() for proper shell escaping of all arguments
         # This correctly handles multiline strings, quotes, and special characters
