@@ -1,17 +1,12 @@
 """Claude Code provider implementation."""
 
-import json
 import logging
 import re
 import shlex
 import time
-from pathlib import Path
 from typing import Any, Dict, Optional
 
-import frontmatter
-
 from cli_agent_orchestrator.clients.tmux import tmux_client
-from cli_agent_orchestrator.constants import CLAUDE_AGENTS_DIR
 from cli_agent_orchestrator.models.claude_agent import ClaudeAgentConfig
 from cli_agent_orchestrator.models.terminal import TerminalStatus
 from cli_agent_orchestrator.providers.base import BaseProvider
@@ -46,44 +41,19 @@ IDLE_PROMPT_PATTERN_LOG = r"[>❯][\s\xa0]"  # Same pattern for log files
 
 
 def _load_claude_agent_profile(agent_name: str) -> Optional[Dict[str, Any]]:
-    """Resolve an agent profile from global Claude dir or CAO agent store.
-
-    Resolution order:
-    1. Global Claude Code directory (~/.claude/agents/)
-    2. CAO agent store (local + built-in via load_agent_profile)
+    """Resolve an agent profile from the CAO agent store.
 
     Args:
         agent_name: Name of the agent to find (without .md extension)
 
     Returns:
-        Dict with 'source' ('global'|'cao'), 'name', 'description', and
-        optional config keys (mcpServers, model, tools, allowedTools, hooks,
-        system_prompt), or None if not found anywhere.
+        Dict with 'name', 'description', and optional config keys
+        (mcpServers, model, tools, allowedTools, hooks, system_prompt),
+        or None if not found.
     """
-    # 1) Try global ~/.claude/agents/ directory
-    agent_path = CLAUDE_AGENTS_DIR / f"{agent_name}.md"
-    if agent_path.exists():
-        try:
-            parsed = frontmatter.loads(agent_path.read_text())
-            meta = parsed.metadata
-            result: Dict[str, Any] = {
-                "source": "global",
-                "name": meta.get("name", agent_name),
-                "description": meta.get("description", ""),
-            }
-            for key in ("mcpServers", "model", "tools", "allowedTools", "hooks"):
-                if key in meta:
-                    result[key] = meta[key]
-            logger.info("Found Claude agent profile at: %s", agent_path)
-            return result
-        except Exception as e:
-            logger.warning("Failed to parse Claude agent profile at %s: %s", agent_path, e)
-
-    # 2) Fallback to CAO agent store (local + built-in)
     try:
         profile = load_agent_profile(agent_name)
         return {
-            "source": "cao",
             "name": profile.name,
             "description": profile.description,
             "system_prompt": profile.system_prompt,
@@ -111,39 +81,10 @@ class ClaudeCodeProvider(BaseProvider):
         self._initialized = False
         self._agent_profile = agent_profile
 
-
-    def _inject_mcp_terminal_id(
-        self, mcp_servers: Dict[str, Any], command_parts: list
-    ) -> None:
-        """Inject CAO_TERMINAL_ID into MCP server env and add --mcp-config to command.
-
-        Forward CAO_TERMINAL_ID so MCP servers (e.g. cao-mcp-server) can identify
-        the current terminal for handoff/assign operations. Claude Code does not
-        automatically forward parent shell env vars to MCP subprocesses, so we
-        inject it explicitly via the env field.
-        """
-        mcp_config = {}
-        for server_name, server_config in mcp_servers.items():
-            if isinstance(server_config, dict):
-                mcp_config[server_name] = dict(server_config)
-            else:
-                mcp_config[server_name] = server_config.model_dump(exclude_none=True)
-
-            env = mcp_config[server_name].get("env", {})
-            if "CAO_TERMINAL_ID" not in env:
-                env["CAO_TERMINAL_ID"] = self.terminal_id
-                mcp_config[server_name]["env"] = env
-
-        mcp_json = json.dumps({"mcpServers": mcp_config})
-        command_parts.extend(["--mcp-config", mcp_json])
-
     def _build_claude_command(self) -> str:
         """Build Claude Code command with agent profile if provided.
 
-        Searches for agent profiles in this order:
-        1. Global Claude Code agent directory (~/.claude/agents/)
-        2. CAO agent store (local + built-in via load_agent_profile)
-
+        Loads agent profile from CAO agent store and converts to CLI flags.
         Returns properly escaped shell command string that can be safely sent via tmux.
         Uses shlex.join() to handle multiline strings and special characters correctly.
         """
@@ -157,20 +98,15 @@ class ClaudeCodeProvider(BaseProvider):
             resolved = _load_claude_agent_profile(self._agent_profile)
             if resolved is None:
                 raise ProviderError(
-                    f"Agent profile '{self._agent_profile}' not found in "
-                    f"global Claude Code agent directory or CAO store"
+                    f"Agent profile '{self._agent_profile}' not found in CAO agent store"
                 )
 
-            # Global profiles use --agent; CAO-only profiles use --append-system-prompt
-            if resolved["source"] == "global":
-                command_parts.extend(["--agent", resolved["name"]])
-            else:
-                system_prompt = resolved.get("system_prompt") or ""
-                if system_prompt:
-                    escaped = system_prompt.replace("\\", "\\\\").replace("\n", "\\n")
-                    command_parts.extend(["--append-system-prompt", escaped])
+            system_prompt = resolved.get("system_prompt") or ""
+            if system_prompt:
+                escaped = system_prompt.replace("\\", "\\\\").replace("\n", "\\n")
+                command_parts.extend(["--append-system-prompt", escaped])
 
-            # Build CLI flags from resolved profile (model, tools, hooks, etc.)
+            # Build CLI flags from resolved profile (model, tools, hooks, MCP, etc.)
             config = ClaudeAgentConfig(
                 name=resolved["name"],
                 description=resolved.get("description", ""),
@@ -180,10 +116,7 @@ class ClaudeCodeProvider(BaseProvider):
                 mcpServers=resolved.get("mcpServers"),
                 hooks=resolved.get("hooks"),
             )
-            command_parts.extend(config.to_cli_flags())
-
-            if config.mcpServers:
-                self._inject_mcp_terminal_id(config.mcpServers, command_parts)
+            command_parts.extend(config.to_cli_flags(terminal_id=self.terminal_id))
 
         # Use shlex.join() for proper shell escaping of all arguments
         # This correctly handles multiline strings, quotes, and special characters

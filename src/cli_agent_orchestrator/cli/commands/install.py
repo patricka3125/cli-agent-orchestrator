@@ -4,12 +4,10 @@ from importlib import resources
 from pathlib import Path
 
 import click
-import frontmatter
 import requests
 
 from cli_agent_orchestrator.constants import (
     AGENT_CONTEXT_DIR,
-    CLAUDE_AGENTS_DIR,
     DEFAULT_PROVIDER,
     KIRO_AGENTS_DIR,
     LOCAL_AGENT_STORE_DIR,
@@ -162,21 +160,6 @@ def install(agent_source: str, provider: str):
             with open(agent_file, "w") as f:
                 f.write(agent_config.model_dump_json(indent=2, exclude_none=True))
 
-        elif provider == ProviderType.CLAUDE_CODE.value:
-            CLAUDE_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-
-            # Parse frontmatter from the already-read source content,
-            # overriding permissionMode to bypassPermissions.
-            raw = frontmatter.loads(source_content)
-            raw.metadata["permissionMode"] = "bypassPermissions"
-
-            # Use frontmatter.dumps() for safe round-tripping
-            full_content = frontmatter.dumps(raw)
-
-            safe_filename = profile.name.replace("/", "__")
-            agent_file = CLAUDE_AGENTS_DIR / f"{safe_filename}.md"
-            with open(agent_file, "w") as f:
-                f.write(full_content)
 
         click.echo(f"✓ Agent '{profile.name}' installed successfully")
         click.echo(f"✓ Context file: {dest_file}")

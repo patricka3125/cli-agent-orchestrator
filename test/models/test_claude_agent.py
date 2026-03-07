@@ -88,8 +88,8 @@ class TestToCliFlags:
         assert "hooks" in parsed
         assert parsed["hooks"] == hook_config
 
-    def test_mcp_servers_excluded_from_flags(self):
-        """Test that mcpServers are NOT included in CLI flags."""
+    def test_mcp_servers_excluded_without_terminal_id(self):
+        """Test that mcpServers are NOT included in CLI flags when terminal_id is not provided."""
         config = ClaudeAgentConfig(
             name="test", description="Test",
             mcpServers={"server1": {"command": "test-cmd"}},
@@ -97,6 +97,43 @@ class TestToCliFlags:
         flags = config.to_cli_flags()
         assert flags == []
         assert "--mcp-config" not in flags
+
+    def test_mcp_servers_included_with_terminal_id(self):
+        """Test that mcpServers ARE included when terminal_id is provided."""
+        config = ClaudeAgentConfig(
+            name="test", description="Test",
+            mcpServers={"server1": {"command": "test-cmd"}},
+        )
+        flags = config.to_cli_flags(terminal_id="term-42")
+        assert "--mcp-config" in flags
+        mcp_json = flags[flags.index("--mcp-config") + 1]
+        parsed = json.loads(mcp_json)
+        assert "mcpServers" in parsed
+        assert parsed["mcpServers"]["server1"]["env"]["CAO_TERMINAL_ID"] == "term-42"
+
+    def test_mcp_preserves_existing_env(self):
+        """Test that existing env vars are preserved when injecting CAO_TERMINAL_ID."""
+        config = ClaudeAgentConfig(
+            name="test", description="Test",
+            mcpServers={"srv": {"command": "cmd", "env": {"MY_VAR": "val"}}},
+        )
+        flags = config.to_cli_flags(terminal_id="term-1")
+        mcp_json = flags[flags.index("--mcp-config") + 1]
+        parsed = json.loads(mcp_json)
+        env = parsed["mcpServers"]["srv"]["env"]
+        assert env["MY_VAR"] == "val"
+        assert env["CAO_TERMINAL_ID"] == "term-1"
+
+    def test_mcp_does_not_override_existing_terminal_id(self):
+        """Test that existing CAO_TERMINAL_ID is not overwritten."""
+        config = ClaudeAgentConfig(
+            name="test", description="Test",
+            mcpServers={"srv": {"command": "cmd", "env": {"CAO_TERMINAL_ID": "user-id"}}},
+        )
+        flags = config.to_cli_flags(terminal_id="term-99")
+        mcp_json = flags[flags.index("--mcp-config") + 1]
+        parsed = json.loads(mcp_json)
+        assert parsed["mcpServers"]["srv"]["env"]["CAO_TERMINAL_ID"] == "user-id"
 
     def test_all_flags_combined(self):
         """Test generating all supported flags together."""
@@ -106,9 +143,9 @@ class TestToCliFlags:
             allowedTools=["Read"],
             tools=["Bash", "Read"],
             hooks={"PostToolUse": []},
-            mcpServers={"s1": {"command": "cmd"}},  # should be excluded
+            mcpServers={"s1": {"command": "cmd"}},
         )
-        flags = config.to_cli_flags()
+        flags = config.to_cli_flags(terminal_id="term-1")
         assert "--model" in flags
         assert "opus" in flags
         assert "--allowedTools" in flags
@@ -116,7 +153,7 @@ class TestToCliFlags:
         assert "--tools" in flags
         assert "Bash,Read" in flags
         assert "--settings" in flags
-        assert "--mcp-config" not in flags
+        assert "--mcp-config" in flags
 
     def test_flag_ordering(self):
         """Test that flags are generated in consistent order: model, allowedTools, tools, settings."""

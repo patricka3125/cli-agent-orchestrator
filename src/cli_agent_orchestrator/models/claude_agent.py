@@ -30,11 +30,12 @@ class ClaudeAgentConfig(BaseModel):
     mcpServers: Optional[Dict[str, Any]] = None
     hooks: Optional[Dict[str, Any]] = None
 
-    def to_cli_flags(self) -> List[str]:
+    def to_cli_flags(self, terminal_id: Optional[str] = None) -> List[str]:
         """Convert config fields to a list of Claude Code CLI flag pairs.
 
         Returns a flat list like ["--model", "sonnet", "--tools", "Bash,Edit"].
-        MCP servers are excluded (handled separately by _inject_mcp_terminal_id).
+        When terminal_id is provided and mcpServers is set, injects CAO_TERMINAL_ID
+        into each server's env and emits --mcp-config.
         """
         flags: List[str] = []
 
@@ -50,6 +51,20 @@ class ClaudeAgentConfig(BaseModel):
         if self.hooks:
             settings_json = json.dumps({"hooks": self.hooks})
             flags.extend(["--settings", settings_json])
+
+        if self.mcpServers and terminal_id:
+            mcp_config = {}
+            for server_name, server_config in self.mcpServers.items():
+                if isinstance(server_config, dict):
+                    server = dict(server_config)
+                else:
+                    server = server_config.model_dump(exclude_none=True)
+                env = server.get("env", {})
+                if "CAO_TERMINAL_ID" not in env:
+                    env["CAO_TERMINAL_ID"] = terminal_id
+                    server["env"] = env
+                mcp_config[server_name] = server
+            flags.extend(["--mcp-config", json.dumps({"mcpServers": mcp_config})])
 
         return flags
 
