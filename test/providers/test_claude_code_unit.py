@@ -746,6 +746,7 @@ class TestBuildClaudeCommandCliFlags:
         command = provider._build_claude_command()
 
         import shlex as _shlex
+
         parts = _shlex.split(command)
         assert "--settings" in parts
         settings_json = parts[parts.index("--settings") + 1]
