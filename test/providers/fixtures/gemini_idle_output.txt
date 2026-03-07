@@ -1,0 +1,5 @@
+Gemini CLI v0.3.0
+
+Model: Welcome to the project! I'm ready to help you with your coding tasks.
+
+> 

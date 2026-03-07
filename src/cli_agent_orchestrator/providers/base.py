@@ -15,6 +15,7 @@ Implemented Providers:
 - ClaudeCodeProvider: For Claude Code (claude)
 - CodexProvider: For Codex CLI (codex)
 - QCliProvider: For Amazon Q Developer CLI (q chat)
+- GeminiProvider: For Google Gemini CLI (gemini)
 
 Each provider must implement pattern matching for its specific CLI's prompt
 and output format to reliably detect status changes.

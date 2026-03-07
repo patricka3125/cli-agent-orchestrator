@@ -1,14 +1,18 @@
 """Install command for CLI Agent Orchestrator."""
 
+import json
 from importlib import resources
 from pathlib import Path
 
 import click
+import frontmatter
 import requests
 
 from cli_agent_orchestrator.constants import (
     AGENT_CONTEXT_DIR,
     DEFAULT_PROVIDER,
+    GEMINI_AGENTS_DIR,
+    GEMINI_SETTINGS_FILE,
     KIRO_AGENTS_DIR,
     LOCAL_AGENT_STORE_DIR,
     PROVIDERS,
@@ -54,6 +58,37 @@ def _download_agent(source: str) -> str:
         return dest_file.stem
 
     raise FileNotFoundError(f"Source not found: {source}")
+
+
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursively merge *overlay* into *base* (in-place).
+
+    For dict-valued keys, merge recursively so that existing nested keys
+    are preserved.  For all other types the overlay value wins.
+    """
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def _merge_gemini_settings(updates: dict) -> None:
+    """Merge updates into ~/.gemini/settings.json (additive, deep).
+
+    Reads the existing settings file, deep-merges the provided dict into
+    it, and writes back.  Nested dict keys (e.g., ``ui.accessibility``)
+    are merged recursively so existing sibling keys are preserved.
+    """
+    settings: dict = {}
+    if GEMINI_SETTINGS_FILE.exists():
+        settings = json.loads(GEMINI_SETTINGS_FILE.read_text())
+
+    _deep_merge(settings, updates)
+
+    GEMINI_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    GEMINI_SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")
 
 
 @click.command()
@@ -157,10 +192,54 @@ def install(agent_source: str, provider: str):
             with open(agent_file, "w") as f:
                 f.write(agent_config.model_dump_json(indent=2, exclude_none=True))
 
+        elif provider == ProviderType.GEMINI.value:
+            # Gemini CLI subagents use .md files with YAML frontmatter,
+            # but only support a subset of keys: name, description, tools, model.
+            # Unsupported keys (mcpServers, hooks, etc.) go into settings.json.
+            GEMINI_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+            safe_filename = profile.name.replace("/", "__")
+            agent_file = GEMINI_AGENTS_DIR / f"{safe_filename}.md"
+
+            # Build Gemini-compatible frontmatter (only supported keys)
+            gemini_meta = {"name": profile.name, "description": profile.description}
+            if profile.tools:
+                gemini_meta["tools"] = profile.tools
+            if profile.model:
+                gemini_meta["model"] = profile.model
+
+            # Read source to get markdown body (system prompt)
+            with open(source_file, "r") as src:
+                source_post = frontmatter.loads(src.read())
+
+            # Write clean .md with filtered frontmatter + original body
+            agent_post = frontmatter.Post(source_post.content, **gemini_meta)
+            agent_file.write_text(frontmatter.dumps(agent_post) + "\n")
+
+            # Merge mcpServers into ~/.gemini/settings.json
+            gemini_settings_updated = False
+            if profile.mcpServers:
+                servers = {}
+                for name, cfg in profile.mcpServers.items():
+                    srv = dict(cfg) if isinstance(cfg, dict) else cfg.model_dump(exclude_none=True)
+                    # Inject $CAO_TERMINAL_ID for env var expansion at runtime.
+                    # Gemini CLI expands $VAR_NAME in env blocks automatically.
+                    env = srv.setdefault("env", {})
+                    env.setdefault("CAO_TERMINAL_ID", "$CAO_TERMINAL_ID")
+                    servers[name] = srv
+                _merge_gemini_settings({"mcpServers": servers})
+                gemini_settings_updated = True
+
+            # Merge hooks into ~/.gemini/settings.json
+            if profile.hooks:
+                _merge_gemini_settings({"hooks": profile.hooks})
+                gemini_settings_updated = True
+
         click.echo(f"✓ Agent '{profile.name}' installed successfully")
         click.echo(f"✓ Context file: {dest_file}")
         if agent_file:
             click.echo(f"✓ {provider} agent: {agent_file}")
+        if provider == ProviderType.GEMINI.value and gemini_settings_updated:
+            click.echo(f"✓ gemini settings updated: {GEMINI_SETTINGS_FILE}")
 
     except FileNotFoundError as e:
         click.echo(f"Error: {e}", err=True)
