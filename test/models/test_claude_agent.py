@@ -30,7 +30,11 @@ class TestClaudeAgentConfigConstruction:
             allowedTools=["Read", "Edit", "Bash(git *)"],
             tools=["Bash", "Edit", "Read"],
             mcpServers={"my-server": {"command": "my-cmd"}},
-            hooks={"PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "echo test"}]}]},
+            hooks={
+                "PreToolUse": [
+                    {"matcher": "Edit", "hooks": [{"type": "command", "command": "echo test"}]}
+                ]
+            },
         )
         assert config.model == "claude-sonnet-4-6"
         assert len(config.allowedTools) == 3
@@ -56,7 +60,8 @@ class TestToCliFlags:
     def test_allowed_tools_flag(self):
         """Test --allowedTools flag generation with space-separated list."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             allowedTools=["Read", "Edit", "Bash(git *)"],
         )
         flags = config.to_cli_flags()
@@ -65,7 +70,8 @@ class TestToCliFlags:
     def test_tools_flag(self):
         """Test --tools flag generation with comma-separated list."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             tools=["Bash", "Edit", "Read"],
         )
         flags = config.to_cli_flags()
@@ -79,7 +85,8 @@ class TestToCliFlags:
             ]
         }
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             hooks=hook_config,
         )
         flags = config.to_cli_flags()
@@ -91,7 +98,8 @@ class TestToCliFlags:
     def test_mcp_servers_excluded_without_terminal_id(self):
         """Test that mcpServers are NOT included in CLI flags when terminal_id is not provided."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             mcpServers={"server1": {"command": "test-cmd"}},
         )
         flags = config.to_cli_flags()
@@ -101,7 +109,8 @@ class TestToCliFlags:
     def test_mcp_servers_included_with_terminal_id(self):
         """Test that mcpServers ARE included when terminal_id is provided."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             mcpServers={"server1": {"command": "test-cmd"}},
         )
         flags = config.to_cli_flags(terminal_id="term-42")
@@ -114,7 +123,8 @@ class TestToCliFlags:
     def test_mcp_preserves_existing_env(self):
         """Test that existing env vars are preserved when injecting CAO_TERMINAL_ID."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             mcpServers={"srv": {"command": "cmd", "env": {"MY_VAR": "val"}}},
         )
         flags = config.to_cli_flags(terminal_id="term-1")
@@ -127,7 +137,8 @@ class TestToCliFlags:
     def test_mcp_does_not_override_existing_terminal_id(self):
         """Test that existing CAO_TERMINAL_ID is not overwritten."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             mcpServers={"srv": {"command": "cmd", "env": {"CAO_TERMINAL_ID": "user-id"}}},
         )
         flags = config.to_cli_flags(terminal_id="term-99")
@@ -138,7 +149,8 @@ class TestToCliFlags:
     def test_all_flags_combined(self):
         """Test generating all supported flags together."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             model="opus",
             allowedTools=["Read"],
             tools=["Bash", "Read"],
@@ -158,7 +170,8 @@ class TestToCliFlags:
     def test_flag_ordering(self):
         """Test that flags are generated in consistent order: model, allowedTools, tools, settings."""
         config = ClaudeAgentConfig(
-            name="test", description="Test",
+            name="test",
+            description="Test",
             model="haiku",
             allowedTools=["Read"],
             tools=["Bash"],

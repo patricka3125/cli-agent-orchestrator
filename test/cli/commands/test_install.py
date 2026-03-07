@@ -280,5 +280,3 @@ class TestInstallCommand:
             result = runner.invoke(install, ["test-agent", "--provider", "kiro_cli"])
 
             mock_load.assert_called_once_with("test-agent")
-
-

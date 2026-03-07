@@ -673,9 +673,7 @@ class TestBuildClaudeCommandResolutionOrder:
 
         provider = ClaudeCodeProvider("test123", "test-session", "window-0", "missing-agent")
 
-        with pytest.raises(
-            ProviderError, match="not found in CAO agent store"
-        ):
+        with pytest.raises(ProviderError, match="not found in CAO agent store"):
             provider._build_claude_command()
 
 
@@ -738,7 +736,9 @@ class TestBuildClaudeCommandCliFlags:
             "description": "Hooks agent",
             "system_prompt": "Be a hooks agent",
             "hooks": {
-                "PreToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "echo pre"}]}]
+                "PreToolUse": [
+                    {"matcher": "Edit", "hooks": [{"type": "command", "command": "echo pre"}]}
+                ]
             },
         }
 
@@ -792,4 +792,3 @@ class TestBuildClaudeCommandCliFlags:
 
         # No system_prompt → no --append-system-prompt; no optional fields → no extra flags
         assert command == "claude --dangerously-skip-permissions"
-
