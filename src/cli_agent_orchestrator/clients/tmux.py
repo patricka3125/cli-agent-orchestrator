@@ -365,6 +365,37 @@ class TmuxClient:
             logger.error(f"Failed to get history from {session_name}:{window_name}: {e}")
             raise
 
+    def get_pane_title(self, session_name: str, window_name: str) -> str:
+        """Get the pane title set by the running application via OSC escape sequences.
+
+        Applications can set the pane title using OSC sequences (e.g., ESC]0;titleBEL).
+        tmux captures this as the pane title (#{pane_title}).
+
+        Args:
+            session_name: Name of tmux session
+            window_name: Name of window in session
+
+        Returns:
+            The pane title string, or empty string if not set or unavailable.
+        """
+        try:
+            session = self.server.sessions.get(session_name=session_name)
+            if not session:
+                raise ValueError(f"Session '{session_name}' not found")
+
+            window = session.windows.get(window_name=window_name)
+            if not window:
+                raise ValueError(f"Window '{window_name}' not found in session '{session_name}'")
+
+            pane = window.panes[0]
+            result = pane.cmd("display-message", "-p", "#{pane_title}")
+            if result.stdout:
+                return result.stdout[0].strip()
+            return ""
+        except Exception as e:
+            logger.error(f"Failed to get pane title from {session_name}:{window_name}: {e}")
+            raise
+
     def list_sessions(self) -> List[Dict[str, str]]:
         """List all tmux sessions."""
         try:

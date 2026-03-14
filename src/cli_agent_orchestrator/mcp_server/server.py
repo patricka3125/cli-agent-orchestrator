@@ -193,14 +193,15 @@ async def _handoff_impl(
 
         await asyncio.sleep(2)  # wait another 2s
 
-        # For Codex provider: prepend handoff context so the worker agent knows
-        # this is a blocking handoff and should simply output results rather than
-        # attempting to call send_message back to the supervisor.
-        # Includes the supervisor's terminal ID (from CAO_TERMINAL_ID env var in
-        # the MCP server process) so the worker can call back if needed.
+        # For providers with MCP tools available (Codex, Gemini): prepend
+        # handoff context so the worker agent knows this is a blocking handoff
+        # and should simply output results rather than attempting to call
+        # send_message back to the supervisor.
+        # Includes the supervisor's terminal ID (from CAO_TERMINAL_ID env var
+        # in the MCP server process) so the worker can call back if needed.
         # Other providers (Claude Code, Kiro CLI) naturally complete and return
         # to idle without this hint, so the message is left unchanged for them.
-        if provider == "codex":
+        if provider in ("codex", "gemini"):
             supervisor_id = os.environ.get("CAO_TERMINAL_ID", "unknown")
             handoff_message = (
                 f"[CAO Handoff] Supervisor terminal ID: {supervisor_id}. "

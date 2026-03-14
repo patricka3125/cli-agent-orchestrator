@@ -1,0 +1,3 @@
+Error: Unable to connect to Gemini API. Please check your authentication.
+
+> 

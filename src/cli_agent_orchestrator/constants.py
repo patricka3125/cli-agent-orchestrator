@@ -74,6 +74,8 @@ LOCAL_AGENT_STORE_DIR = CAO_HOME_DIR / "agent-store"
 # Provider-specific agent directories
 Q_AGENTS_DIR = Path.home() / ".aws" / "amazonq" / "cli-agents"  # Q CLI agents
 KIRO_AGENTS_DIR = Path.home() / ".kiro" / "agents"  # Kiro CLI agents
+GEMINI_AGENTS_DIR = Path.home() / ".gemini" / "agents"  # Gemini CLI agents
+GEMINI_SETTINGS_FILE = Path.home() / ".gemini" / "settings.json"  # Gemini CLI settings
 
 # =============================================================================
 # Database Configuration
