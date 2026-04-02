@@ -69,6 +69,27 @@ This is safe because CAO already confirms workspace trust during `cao launch` ("
 
 A fallback `_handle_trust_prompt()` method also monitors for the trust dialog and sends Enter to accept it, in case the flag doesn't cover all scenarios.
 
+### Message Delivery and Input Queuing
+
+Claude Code supports native input queuing. When another CAO agent sends a message via
+`send_message` or an assign-style workflow, CAO delivers that message immediately instead
+of waiting for Claude Code to return to an idle prompt.
+
+This differs from most other providers. For non-queue-capable CLIs, CAO waits until the
+provider reports `IDLE` or `COMPLETED` before sending pending inbox messages. Claude Code
+does not need that gate because it can accept new input while a response is still being
+generated and queue it for the next turn.
+
+The one exception is `TerminalStatus.WAITING_USER_ANSWER`. When Claude Code is showing an
+interactive selection or confirmation prompt, CAO defers inbox delivery until that prompt
+has been resolved. This prevents CAO from interfering with numbered option lists or other
+explicit user-answer states.
+
+This behavior makes Claude Code delivery more reliable than a pure idle-pattern approach.
+If Claude Code changes spinner characters, prompt glyphs, or other transient TUI output,
+CAO can still deliver queued messages as long as Claude Code is not waiting for a user
+answer.
+
 ## Configuration
 
 ### Agent Profile Integration
