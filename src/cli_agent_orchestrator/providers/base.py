@@ -80,6 +80,17 @@ class BaseProvider(ABC):
         """
         return 2
 
+    @property
+    def supports_input_queuing(self) -> bool:
+        """Whether the CLI can queue input while it is still processing.
+
+        When ``True``, the inbox service may deliver pending messages without
+        waiting for ``IDLE`` or ``COMPLETED`` status. The only delivery block
+        that still applies is ``TerminalStatus.WAITING_USER_ANSWER`` so CAO
+        does not interrupt interactive confirmation or selection prompts.
+        """
+        return False
+
     @abstractmethod
     def initialize(self) -> bool:
         """Initialize the provider (e.g., start CLI tool, send setup commands).
