@@ -76,6 +76,11 @@ class ClaudeCodeProvider(BaseProvider):
         self._initialized = False
         self._agent_profile = agent_profile
 
+    @property
+    def supports_input_queuing(self) -> bool:
+        """Claude Code accepts queued input while a response is still in progress."""
+        return True
+
     def _build_claude_command(self) -> str:
         """Build Claude Code command with agent profile if provided.
 

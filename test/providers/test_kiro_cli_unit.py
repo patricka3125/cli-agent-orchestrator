@@ -22,6 +22,12 @@ def load_fixture(filename: str) -> str:
 class TestKiroCliProviderInitialization:
     """Test Kiro CLI provider initialization."""
 
+    def test_supports_input_queuing_uses_default_false(self):
+        """Test Kiro CLI inherits the default non-queueing provider behavior."""
+        provider = KiroCliProvider("test1234", "test-session", "window-0", "developer")
+
+        assert provider.supports_input_queuing is False
+
     @patch("cli_agent_orchestrator.providers.kiro_cli.wait_for_shell")
     @patch("cli_agent_orchestrator.providers.kiro_cli.wait_until_status")
     @patch("cli_agent_orchestrator.providers.kiro_cli.tmux_client")
