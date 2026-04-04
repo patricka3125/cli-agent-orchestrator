@@ -1,20 +1,26 @@
 """Tests for assign MCP tool."""
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from cli_agent_orchestrator.mcp_server.server import _build_assign_description
+from cli_agent_orchestrator.models.terminal import TerminalStatus
 
 
 class TestAssignSenderIdInjection:
     """Tests for sender ID injection in _assign_impl."""
 
+    @pytest.mark.asyncio
+    @patch("cli_agent_orchestrator.mcp_server.server.asyncio.sleep", new_callable=AsyncMock)
+    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", True)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
-    def test_assign_appends_sender_id_when_injection_enabled(self, mock_create, mock_send):
+    async def test_assign_appends_sender_id_when_injection_enabled(
+        self, mock_create, mock_send, mock_wait, mock_sleep
+    ):
         """When injection is enabled, assign should append sender ID suffix."""
         from cli_agent_orchestrator.mcp_server.server import _assign_impl
 
@@ -22,7 +28,7 @@ class TestAssignSenderIdInjection:
         mock_send.return_value = None
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "supervisor-abc123"}):
-            result = _assign_impl("developer", "Analyze the logs")
+            result = await _assign_impl("developer", "Analyze the logs")
 
         assert result["success"] is True
         sent_message = mock_send.call_args[0][1]
@@ -31,10 +37,15 @@ class TestAssignSenderIdInjection:
         assert "[Assigned by terminal supervisor-abc123" in sent_message
         assert "send results back to terminal supervisor-abc123 using send_message]" in sent_message
 
+    @pytest.mark.asyncio
+    @patch("cli_agent_orchestrator.mcp_server.server.asyncio.sleep", new_callable=AsyncMock)
+    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", False)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
-    def test_assign_no_suffix_when_injection_disabled(self, mock_create, mock_send):
+    async def test_assign_no_suffix_when_injection_disabled(
+        self, mock_create, mock_send, mock_wait, mock_sleep
+    ):
         """When injection is disabled, assign should send the message unchanged."""
         from cli_agent_orchestrator.mcp_server.server import _assign_impl
 
@@ -42,17 +53,22 @@ class TestAssignSenderIdInjection:
         mock_send.return_value = None
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "supervisor-abc123"}):
-            result = _assign_impl("developer", "Analyze the logs")
+            result = await _assign_impl("developer", "Analyze the logs")
 
         assert result["success"] is True
         sent_message = mock_send.call_args[0][1]
         assert mock_send.call_args[0][2] == "assign"
         assert sent_message == "Analyze the logs"
 
+    @pytest.mark.asyncio
+    @patch("cli_agent_orchestrator.mcp_server.server.asyncio.sleep", new_callable=AsyncMock)
+    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", True)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
-    def test_assign_sender_id_fallback_unknown(self, mock_create, mock_send):
+    async def test_assign_sender_id_fallback_unknown(
+        self, mock_create, mock_send, mock_wait, mock_sleep
+    ):
         """When CAO_TERMINAL_ID is not set, suffix should use 'unknown'."""
         from cli_agent_orchestrator.mcp_server.server import _assign_impl
 
@@ -60,16 +76,21 @@ class TestAssignSenderIdInjection:
         mock_send.return_value = None
 
         with patch.dict(os.environ, {}, clear=True):
-            result = _assign_impl("developer", "Build feature X")
+            result = await _assign_impl("developer", "Build feature X")
 
         sent_message = mock_send.call_args[0][1]
         assert mock_send.call_args[0][2] == "assign"
         assert "[Assigned by terminal unknown" in sent_message
 
+    @pytest.mark.asyncio
+    @patch("cli_agent_orchestrator.mcp_server.server.asyncio.sleep", new_callable=AsyncMock)
+    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
     @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", True)
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
-    def test_assign_suffix_is_appended_not_prepended(self, mock_create, mock_send):
+    async def test_assign_suffix_is_appended_not_prepended(
+        self, mock_create, mock_send, mock_wait, mock_sleep
+    ):
         """The sender ID should be a suffix, not a prefix."""
         from cli_agent_orchestrator.mcp_server.server import _assign_impl
 
@@ -78,12 +99,53 @@ class TestAssignSenderIdInjection:
         original = "Do the task described in /path/to/task.md"
 
         with patch.dict(os.environ, {"CAO_TERMINAL_ID": "sup-111"}):
-            _assign_impl("developer", original)
+            await _assign_impl("developer", original)
 
         sent_message = mock_send.call_args[0][1]
         assert mock_send.call_args[0][2] == "assign"
         assert sent_message.startswith(original)
         assert sent_message.index("[Assigned by terminal") > len(original)
+
+    @pytest.mark.asyncio
+    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=False)
+    @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
+    @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
+    async def test_assign_fails_when_terminal_not_ready(self, mock_create, mock_send, mock_wait):
+        """Assign should return a failure when terminal readiness times out."""
+        from cli_agent_orchestrator.mcp_server.server import _assign_impl
+
+        mock_create.return_value = ("worker-5", "claude_code")
+
+        result = await _assign_impl("developer", "Do something")
+
+        assert result["success"] is False
+        assert result["terminal_id"] == "worker-5"
+        assert "did not reach ready status" in result["message"]
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("cli_agent_orchestrator.mcp_server.server.asyncio.sleep", new_callable=AsyncMock)
+    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=True)
+    @patch("cli_agent_orchestrator.mcp_server.server.ENABLE_SENDER_ID_INJECTION", False)
+    @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
+    @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
+    async def test_assign_waits_for_idle_or_completed(
+        self, mock_create, mock_send, mock_wait, mock_sleep
+    ):
+        """Assign should wait for terminal readiness before sending."""
+        from cli_agent_orchestrator.mcp_server.server import _assign_impl
+
+        mock_create.return_value = ("worker-6", "claude_code")
+        mock_send.return_value = None
+
+        await _assign_impl("developer", "Task")
+
+        mock_wait.assert_called_once_with(
+            "worker-6",
+            {TerminalStatus.IDLE, TerminalStatus.COMPLETED},
+            timeout=120.0,
+        )
+        mock_sleep.assert_awaited_once_with(2)
 
 
 class TestBuildAssignDescription:
