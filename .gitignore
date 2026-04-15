@@ -48,3 +48,6 @@ context/
 
 # Worktrees
 .worktrees
+
+# Development process artifacts
+/development_reports/
