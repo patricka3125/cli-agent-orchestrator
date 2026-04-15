@@ -1,10 +1,12 @@
-"""Tests for Discord plugin configuration loading and lifecycle."""
+"""Tests for Discord plugin configuration, lifecycle, and hook dispatch."""
 
-from unittest.mock import AsyncMock
+import json
 
+import httpx
 import pytest
 
 from cao_discord.plugin import DiscordPlugin
+from cli_agent_orchestrator.plugins import PostSendMessageEvent
 
 
 def _timeout_values(plugin: DiscordPlugin) -> tuple[float | None, float | None, float | None, float | None]:
@@ -12,6 +14,15 @@ def _timeout_values(plugin: DiscordPlugin) -> tuple[float | None, float | None, 
 
     timeout = plugin._client.timeout
     return timeout.connect, timeout.read, timeout.write, timeout.pool
+
+
+async def _replace_client_with_mock_transport(
+    plugin: DiscordPlugin, handler: httpx.MockTransport
+) -> None:
+    """Swap in a mock transport-backed client and close the setup client first."""
+
+    await plugin._client.aclose()
+    plugin._client = httpx.AsyncClient(transport=handler)
 
 
 @pytest.mark.asyncio
@@ -118,10 +129,187 @@ async def test_teardown_is_safe_after_failed_setup(
 
 
 @pytest.mark.asyncio
-async def test_teardown_closes_client_after_successful_setup(
+async def test_on_post_send_message_posts_webhook_payload_with_tmux_window_name(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
-    """Successful setup should create a client that teardown closes."""
+    """The hook should send a webhook payload with the resolved display name."""
+
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(
+            {
+                "method": request.method,
+                "url": str(request.url),
+                "json": json.loads(request.content.decode("utf-8")),
+            }
+        )
+        return httpx.Response(204)
+
+    monkeypatch.setenv("CAO_DISCORD_WEBHOOK_URL", "https://discord.example/happy-path")
+    monkeypatch.delenv("CAO_DISCORD_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cao_discord.plugin.find_dotenv", lambda usecwd=True: "")
+    monkeypatch.setattr(
+        "cao_discord.plugin.get_terminal_metadata",
+        lambda terminal_id: {"tmux_window": "coder-a1b2", "id": terminal_id},
+    )
+
+    plugin = DiscordPlugin()
+    await plugin.setup()
+    await _replace_client_with_mock_transport(plugin, httpx.MockTransport(handler))
+
+    result = await plugin.on_post_send_message(
+        PostSendMessageEvent(
+            sender="abc12345",
+            receiver="def67890",
+            message="hello",
+            orchestration_type="send_message",
+        )
+    )
+
+    assert result is None
+    assert requests == [
+        {
+            "method": "POST",
+            "url": "https://discord.example/happy-path",
+            "json": {"username": "coder-a1b2", "content": "hello"},
+        }
+    ]
+
+    await plugin.teardown()
+
+
+@pytest.mark.asyncio
+async def test_on_post_send_message_falls_back_to_terminal_id_when_metadata_is_missing_or_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Missing or empty tmux window metadata should fall back to the sender id."""
+
+    requests: list[dict[str, str]] = []
+    metadata_values = iter([None, {}, {"tmux_window": "", "id": "abc12345"}])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(204)
+
+    monkeypatch.setenv("CAO_DISCORD_WEBHOOK_URL", "https://discord.example/fallback")
+    monkeypatch.delenv("CAO_DISCORD_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cao_discord.plugin.find_dotenv", lambda usecwd=True: "")
+    monkeypatch.setattr(
+        "cao_discord.plugin.get_terminal_metadata",
+        lambda terminal_id: next(metadata_values),
+    )
+
+    plugin = DiscordPlugin()
+    await plugin.setup()
+    await _replace_client_with_mock_transport(plugin, httpx.MockTransport(handler))
+
+    for message in ("first", "second", "third"):
+        result = await plugin.on_post_send_message(
+            PostSendMessageEvent(
+                sender="abc12345",
+                receiver="def67890",
+                message=message,
+                orchestration_type="send_message",
+            )
+        )
+        assert result is None
+
+    assert requests == [
+        {"username": "abc12345", "content": "first"},
+        {"username": "abc12345", "content": "second"},
+        {"username": "abc12345", "content": "third"},
+    ]
+
+    await plugin.teardown()
+
+
+@pytest.mark.asyncio
+async def test_on_post_send_message_logs_warning_for_http_500_without_raising(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """HTTP 5xx responses should log a warning and not escape the hook."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="webhook temporarily broken")
+
+    monkeypatch.setenv("CAO_DISCORD_WEBHOOK_URL", "https://discord.example/server-error")
+    monkeypatch.delenv("CAO_DISCORD_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cao_discord.plugin.find_dotenv", lambda usecwd=True: "")
+    monkeypatch.setattr(
+        "cao_discord.plugin.get_terminal_metadata",
+        lambda terminal_id: {"tmux_window": "coder-a1b2", "id": terminal_id},
+    )
+
+    plugin = DiscordPlugin()
+    await plugin.setup()
+    await _replace_client_with_mock_transport(plugin, httpx.MockTransport(handler))
+
+    with caplog.at_level("WARNING", logger="cao_discord.plugin"):
+        result = await plugin.on_post_send_message(
+            PostSendMessageEvent(
+                sender="abc12345",
+                receiver="def67890",
+                message="hello",
+                orchestration_type="send_message",
+            )
+        )
+
+    assert result is None
+    assert "Discord webhook POST failed: 500 webhook temporarily broken" in caplog.text
+
+    await plugin.teardown()
+
+
+@pytest.mark.asyncio
+async def test_on_post_send_message_logs_warning_for_httpx_error_without_raising(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Transport errors should log a warning and not escape the hook."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    monkeypatch.setenv("CAO_DISCORD_WEBHOOK_URL", "https://discord.example/connect-error")
+    monkeypatch.delenv("CAO_DISCORD_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cao_discord.plugin.find_dotenv", lambda usecwd=True: "")
+    monkeypatch.setattr(
+        "cao_discord.plugin.get_terminal_metadata",
+        lambda terminal_id: {"tmux_window": "coder-a1b2", "id": terminal_id},
+    )
+
+    plugin = DiscordPlugin()
+    await plugin.setup()
+    await _replace_client_with_mock_transport(plugin, httpx.MockTransport(handler))
+
+    with caplog.at_level("WARNING", logger="cao_discord.plugin"):
+        result = await plugin.on_post_send_message(
+            PostSendMessageEvent(
+                sender="abc12345",
+                receiver="def67890",
+                message="hello",
+                orchestration_type="send_message",
+            )
+        )
+
+    assert result is None
+    assert "Discord webhook POST raised: boom" in caplog.text
+
+    await plugin.teardown()
+
+
+@pytest.mark.asyncio
+async def test_teardown_closes_real_client_after_successful_setup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Teardown should close a real AsyncClient instance."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204)
 
     monkeypatch.setenv("CAO_DISCORD_WEBHOOK_URL", "https://discord.example/teardown")
     monkeypatch.delenv("CAO_DISCORD_TIMEOUT_SECONDS", raising=False)
@@ -130,8 +318,8 @@ async def test_teardown_closes_client_after_successful_setup(
 
     plugin = DiscordPlugin()
     await plugin.setup()
-    plugin._client.aclose = AsyncMock()
+    await _replace_client_with_mock_transport(plugin, httpx.MockTransport(handler))
 
     await plugin.teardown()
 
-    plugin._client.aclose.assert_awaited_once()
+    assert plugin._client.is_closed is True
