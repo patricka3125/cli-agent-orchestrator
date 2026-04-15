@@ -45,7 +45,3 @@ CAO_DISCORD_TIMEOUT_SECONDS=5.0
 ## Troubleshooting
 
 If `CAO_DISCORD_WEBHOOK_URL` is missing, `PluginRegistry.load()` logs a warning during `cao-server` startup and skips registering the plugin for the lifetime of that server process.
-
-## Design
-
-See [`docs/feat-discord-plugin-design.md`](../../../docs/feat-discord-plugin-design.md) for the full design rationale and phased implementation plan.
