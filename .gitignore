@@ -50,4 +50,4 @@ context/
 .worktrees
 
 # Development process artifacts
-/development_reports/
+development_reports/
