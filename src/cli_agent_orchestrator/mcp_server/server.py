@@ -483,7 +483,7 @@ else:
 
 
 # Implementation function for assign
-def _assign_impl(
+async def _assign_impl(
     agent_profile: str, message: str, working_directory: Optional[str] = None
 ) -> Dict[str, Any]:
     """Implementation of assign logic."""
@@ -499,13 +499,18 @@ def _assign_impl(
         if not wait_until_terminal_status(
             terminal_id,
             {TerminalStatus.IDLE, TerminalStatus.COMPLETED},
-            timeout=60.0,
+            timeout=120.0,
         ):
             return {
                 "success": False,
                 "terminal_id": terminal_id,
-                "message": f"Terminal {terminal_id} did not reach ready status within 60 seconds — agent may not have started",
+                "message": f"Terminal {terminal_id} did not reach ready status within 120 seconds — agent may not have started",
             }
+
+        # Stabilization delay: even after IDLE, some providers need a beat before
+        # the first keystroke lands reliably — otherwise the assign message is
+        # intermittently dropped.
+        await asyncio.sleep(2)
 
         # Send message (auto-injects sender terminal ID suffix when enabled)
         _send_direct_input_assign(terminal_id, message)
@@ -585,7 +590,7 @@ if ENABLE_WORKING_DIRECTORY:
             default=None, description="Optional working directory where the agent should execute"
         ),
     ) -> Dict[str, Any]:
-        return _assign_impl(agent_profile, message, working_directory)
+        return await _assign_impl(agent_profile, message, working_directory)
 
 else:
 
@@ -596,7 +601,7 @@ else:
         ),
         message: str = Field(description=_assign_message_field_desc),
     ) -> Dict[str, Any]:
-        return _assign_impl(agent_profile, message, None)
+        return await _assign_impl(agent_profile, message, None)
 
 
 # Implementation function for send_message
