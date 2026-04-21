@@ -109,7 +109,14 @@ def check_and_send_pending_messages(
     # the idle prompt was never found, so messages stayed PENDING forever.
     status = provider.get_status()
 
-    if status not in (TerminalStatus.IDLE, TerminalStatus.COMPLETED):
+    if provider.supports_input_queuing:
+        # Queue-capable providers can accept new input while processing.
+        # Only pause delivery when the CLI is explicitly waiting for a user
+        # answer so CAO does not interfere with an interactive prompt.
+        if status == TerminalStatus.WAITING_USER_ANSWER:
+            logger.debug(f"Terminal {terminal_id} waiting for user answer, deferring delivery")
+            return False
+    elif status not in (TerminalStatus.IDLE, TerminalStatus.COMPLETED):
         logger.debug(f"Terminal {terminal_id} not ready (status={status})")
         return False
 
@@ -179,6 +186,11 @@ class LogFileHandler(FileSystemEventHandler):
             messages = get_pending_messages(terminal_id, limit=1)
             if not messages:
                 logger.debug(f"No pending messages for {terminal_id}, skipping")
+                return
+
+            provider = provider_manager.get_provider(terminal_id)
+            if provider is not None and provider.supports_input_queuing:
+                check_and_send_pending_messages(terminal_id, registry=self._registry)
                 return
 
             # Fast check: does log tail have idle pattern?

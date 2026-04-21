@@ -17,6 +17,12 @@ _PATCH_SETTINGS = patch.object(ClaudeCodeProvider, "_ensure_skip_bypass_prompt_s
 class TestClaudeCodeProviderInitialization:
     """Tests for ClaudeCodeProvider initialization."""
 
+    def test_supports_input_queuing_enabled(self):
+        """Test Claude Code provider advertises native input queuing support."""
+        provider = ClaudeCodeProvider("test123", "test-session", "window-0")
+
+        assert provider.supports_input_queuing is True
+
     @_PATCH_SETTINGS
     @patch("cli_agent_orchestrator.providers.claude_code.wait_for_shell")
     @patch("cli_agent_orchestrator.providers.claude_code.wait_until_status")
