@@ -107,7 +107,9 @@ class TestAssignSenderIdInjection:
         assert sent_message.index("[Assigned by terminal") > len(original)
 
     @pytest.mark.asyncio
-    @patch("cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=False)
+    @patch(
+        "cli_agent_orchestrator.mcp_server.server.wait_until_terminal_status", return_value=False
+    )
     @patch("cli_agent_orchestrator.mcp_server.server._send_direct_input")
     @patch("cli_agent_orchestrator.mcp_server.server._create_terminal")
     async def test_assign_fails_when_terminal_not_ready(self, mock_create, mock_send, mock_wait):
