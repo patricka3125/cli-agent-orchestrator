@@ -167,7 +167,7 @@ class LogFileHandler(FileSystemEventHandler):
 
             provider = provider_manager.get_provider(terminal_id)
             if provider is not None and provider.supports_input_queuing:
-                check_and_send_pending_messages(terminal_id)
+                check_and_send_pending_messages(terminal_id, registry=self._registry)
                 return
 
             # Fast check: does log tail have idle pattern?

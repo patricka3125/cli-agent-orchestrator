@@ -339,7 +339,7 @@ class TestLogFileHandler:
         handler._handle_log_change("test-terminal")
 
         mock_has_idle.assert_not_called()
-        mock_check_send.assert_called_once_with("test-terminal")
+        mock_check_send.assert_called_once_with("test-terminal", registry=None)
 
     @patch("cli_agent_orchestrator.services.inbox_service.check_and_send_pending_messages")
     @patch("cli_agent_orchestrator.services.inbox_service.provider_manager")
@@ -359,7 +359,7 @@ class TestLogFileHandler:
         handler._handle_log_change("test-terminal")
 
         mock_has_idle.assert_called_once_with("test-terminal")
-        mock_check_send.assert_called_once_with("test-terminal")
+        mock_check_send.assert_called_once_with("test-terminal", registry=None)
 
     def test_on_modified_non_log_file(self):
         """Test on_modified ignores non-log files."""
