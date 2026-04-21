@@ -48,6 +48,12 @@ class TestBaseProvider:
 
         assert provider.status == TerminalStatus.IDLE
 
+    def test_supports_input_queuing_default_false(self):
+        """Test providers default to not supporting input queuing."""
+        provider = ConcreteProvider("term-123", "session-1", "window-0")
+
+        assert provider.supports_input_queuing is False
+
     def test_update_status(self):
         """Test _update_status method."""
         provider = ConcreteProvider("term-123", "session-1", "window-0")
